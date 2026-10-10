@@ -150,14 +150,15 @@ static int At(const std::vector<int>& Values, int Index)
 	return Index >= 0 && Index < static_cast<int>(Values.size()) ? Values[Index] : 0;
 }
 
-enum class Mark { None, Match, Partial, Wrong };
+// Todo is in the build and still to place; Wrong is placed and not in the build, or in it with no rank.
+enum class Mark { None, Match, Partial, Wrong, Todo };
+// GameMaker colours are blue, green, red from the high byte down: green, orange, red, blue.
+static const double MARK_COLORS[] = { 0, 0x5AD25A, 0x2896F5, 0x3C3CF0, 0xF59646 };
 
 // A ring around the middle of a box. Fill is how much of the box the ring spans.
 static void Outline(double Left, double Top, double Right, double Bottom, Mark Kind, double Fill)
 {
-	// GameMaker colours are blue, green, red from the high byte down.
-	static const double colors[] = { 0, 0x5AD25A, 0x3CC8F0, 0x3C3CF0 };
-	g_Yytk->CallBuiltin("draw_set_color", { RValue(colors[static_cast<int>(Kind)]) });
+	g_Yytk->CallBuiltin("draw_set_color", { RValue(MARK_COLORS[static_cast<int>(Kind)]) });
 	// The game's shapes land most of a pixel right and down of its sprites.
 	constexpr double nudge = 0.75;
 	double x = (Left + Right) / 2 - nudge, y = (Top + Bottom) / 2 - nudge, radius = (Right - Left) / 2 * Fill;
@@ -172,6 +173,17 @@ static void Outline(double Left, double Top, double Right, double Bottom, Mark K
 		g_Yytk->CallBuiltin("draw_vertex", { RValue(x + across * (radius + width)), RValue(y + down * (radius + width)) });
 	}
 	g_Yytk->CallBuiltin("draw_primitive_end", {});
+}
+
+// Text centred under a point, edged in black so it reads over the map.
+static void Label(double X, double Y, const std::string& Text, Mark Kind)
+{
+	static const int edge[][2] = { { -2, 0 }, { 2, 0 }, { 0, -2 }, { 0, 2 }, { -1, -1 }, { 1, -1 }, { -1, 1 }, { 1, 1 } };
+	g_Yytk->CallBuiltin("draw_set_color", { RValue(0.0) });
+	for (const auto& offset : edge)
+		g_Yytk->CallBuiltin("draw_text", { RValue(X + offset[0]), RValue(Y + offset[1]), RValue(Text.c_str()) });
+	g_Yytk->CallBuiltin("draw_set_color", { RValue(MARK_COLORS[static_cast<int>(Kind)]) });
+	g_Yytk->CallBuiltin("draw_text", { RValue(X), RValue(Y), RValue(Text.c_str()) });
 }
 
 // Outlines the ancestral legacy map against the build. The UI keeps a list of what can be
@@ -203,7 +215,11 @@ static void MarkLegacies(CInstance* Self, const Build& Build)
 	double shift_x = (seen_x - pan_x) * zoom, shift_y = (seen_y - pan_y) * zoom;
 
 	RValue old_color = g_Yytk->CallBuiltin("draw_get_color", {}), old_alpha = g_Yytk->CallBuiltin("draw_get_alpha", {});
+	RValue old_halign = g_Yytk->CallBuiltin("draw_get_halign", {}), old_valign = g_Yytk->CallBuiltin("draw_get_valign", {});
 	g_Yytk->CallBuiltin("draw_set_alpha", { RValue(1.0) });
+	// Centred, hanging from the top.
+	g_Yytk->CallBuiltin("draw_set_halign", { RValue(1.0) });
+	g_Yytk->CallBuiltin("draw_set_valign", { RValue(0.0) });
 	// Cut the outlines off at the panel's edge. The scissor is in window pixels, the panel in GUI units.
 	RValue old_scissor = g_Yytk->CallBuiltin("gpu_get_scissor", {});
 	double scale_x = ToNumber(g_Yytk->CallBuiltin("window_get_width", {})) / (std::max)(1.0, ToNumber(g_Yytk->CallBuiltin("display_get_gui_width", {})));
@@ -226,11 +242,20 @@ static void MarkLegacies(CInstance* Self, const Build& Build)
 		for (const Ranked& legacy : Build.legacies)
 			if (legacy.id == id) wanted = &legacy;
 		bool active = At(g_Live.realms, LegacyRealm(id)) != 0;
+		int rank = At(g_Live.legacy_ranks, id);
 		Mark mark = Mark::None;
-		if (wanted) mark = !active ? Mark::Wrong : At(g_Live.legacy_ranks, id) == wanted->rank ? Mark::Match : Mark::Partial;
+		if (wanted) mark = !active ? Mark::Todo : rank == 0 ? Mark::Wrong : rank == wanted->rank ? Mark::Match : Mark::Partial;
 		else if (active) mark = Mark::Wrong;
-		if (mark != Mark::None)
-			Outline(x, y, x + width, y + height, mark, 1.0);
+		if (mark == Mark::None)
+			continue;
+		Outline(x, y, x + width, y + height, mark, 1.0);
+		if (!wanted)
+			continue;
+		// Ranks put in against the build's: "2 < 10", or the rank alone once it matches.
+		std::string label = std::to_string(rank);
+		if (rank != wanted->rank)
+			label += (rank < wanted->rank ? " < " : " > ") + std::to_string(wanted->rank);
+		Label(x + width / 2, y + height + 6, label, mark);
 	}
 
 	for (const RValue& entry : slot_list)
@@ -248,7 +273,7 @@ static void MarkLegacies(CInstance* Self, const Build& Build)
 		bool wanted = id == Build.first_node || std::find(Build.nodes.begin(), Build.nodes.end(), id) != Build.nodes.end();
 		bool placed = At(g_Live.stones, id) != 0;
 		if (wanted || placed)
-			Outline(x1, y1, x2, y2, wanted && placed ? Mark::Match : Mark::Wrong, 0.92);
+			Outline(x1, y1, x2, y2, !wanted ? Mark::Wrong : placed ? Mark::Match : Mark::Todo, 0.92);
 	}
 
 	if (old_scissor.IsStruct())
@@ -256,6 +281,8 @@ static void MarkLegacies(CInstance* Self, const Build& Build)
 		auto part = [&](const char* Name) { return g_Yytk->CallBuiltin("variable_struct_get", { old_scissor, RValue(Name) }); };
 		g_Yytk->CallBuiltin("gpu_set_scissor", { part("x"), part("y"), part("w"), part("h") });
 	}
+	g_Yytk->CallBuiltin("draw_set_halign", { old_halign });
+	g_Yytk->CallBuiltin("draw_set_valign", { old_valign });
 	g_Yytk->CallBuiltin("draw_set_color", { old_color });
 	g_Yytk->CallBuiltin("draw_set_alpha", { old_alpha });
 }

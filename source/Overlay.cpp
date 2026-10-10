@@ -127,8 +127,9 @@ static void DrawReaper(const Build& Build)
 		ImGui::Text("%s, level %d", UltimatumName(Build.ultimatum).c_str(), Build.ultimatum_level);
 }
 
+static const ImVec4 TODO_COLOR = { 0.27f, 0.59f, 0.96f, 1.0f };
 static const ImVec4 MATCH_COLOR = { 0.45f, 0.85f, 0.45f, 1.0f };
-static const ImVec4 PARTIAL_COLOR = { 0.95f, 0.8f, 0.3f, 1.0f };
+static const ImVec4 PARTIAL_COLOR = { 0.96f, 0.59f, 0.16f, 1.0f };
 
 static int At(const std::vector<int>& Values, int Index)
 {
@@ -160,7 +161,7 @@ static void DrawLegacy(const Build& Build)
 	bool stones_match = placed == static_cast<int>(wanted.size()) && !extra;
 	std::string stones = std::to_string(placed) + " of " + std::to_string(wanted.size()) + " stones placed";
 	if (extra) stones += ", " + std::to_string(extra) + " not in the build";
-	ImGui::TextColored(stones_match ? MATCH_COLOR : ERROR_COLOR, "%s", stones.c_str());
+	ImGui::TextColored(stones_match ? MATCH_COLOR : extra ? ERROR_COLOR : TODO_COLOR, "%s", stones.c_str());
 
 	if (Build.legacies.empty())
 		ImGui::TextDisabled("no legacies");
@@ -170,11 +171,11 @@ static void DrawLegacy(const Build& Build)
 		int rank = At(g_Live.legacy_ranks, legacy.id);
 		std::string name = LegacyName(legacy.id);
 		if (!active)
-			ImGui::TextColored(ERROR_COLOR, "%s, rank %d: not active", name.c_str(), legacy.rank);
+			ImGui::TextColored(TODO_COLOR, "%s: not active, build has rank %d", name.c_str(), legacy.rank);
 		else if (rank != legacy.rank)
-			ImGui::TextColored(PARTIAL_COLOR, "%s: rank %d, build has %d", name.c_str(), rank, legacy.rank);
+			ImGui::TextColored(rank ? PARTIAL_COLOR : ERROR_COLOR, "%s: %d %s %d", name.c_str(), rank, rank < legacy.rank ? "<" : ">", legacy.rank);
 		else
-			ImGui::TextColored(MATCH_COLOR, "%s, rank %d", name.c_str(), legacy.rank);
+			ImGui::TextColored(MATCH_COLOR, "%s: %d", name.c_str(), legacy.rank);
 	}
 }
 
