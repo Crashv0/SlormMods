@@ -390,13 +390,21 @@ Mark AttributeMark(const Build& Build, int Id, int& Rank, int& Wanted)
 // An equipment slot's side on a 1920-wide screen.
 constexpr double GEAR_SLOT_SIZE = 64;
 
-// How many of the build's stats an item has in the build's tiers.
+// How much of what the build lists an item has: its stats in the build's tiers, its legendary and special stats.
 static int SharedStats(const BuildItem& Wanted, const LiveItem& Item)
 {
 	int shared = 0;
 	for (const BuildAffix& affix : Wanted.affixes)
 		for (const LiveAffix& held : Item.affixes)
 			if (held.stat == affix.stat && held.tier == affix.tier) shared++;
+	// The legendary and the special stats tell two rings apart when their stats do not.
+	for (const LiveAffix& held : Item.affixes)
+	{
+		if (held.tier == "L" && held.id == Wanted.legendary) shared += 3;
+		if (held.tier == "RP" && held.id == Wanted.smith) shared++;
+		if (held.tier == "MA" && held.id == Wanted.mastery) shared++;
+		if (held.tier == "AT" && held.id == Wanted.attribute) shared++;
+	}
 	return shared;
 }
 
@@ -1018,11 +1026,27 @@ static void MarkTooltip(CInstance* Self, const Build& Build)
 	std::string note;
 	const BuildItem* wanted = nullptr;
 	int best = -1;
+	// A worn item goes with the build item its slot's frame goes with.
+	int place = static_cast<int>(ToNumber(get("tooltip_value")));
+	for (const BuildItem& item : Build.items)
+		if (place >= 0 && place < GEAR_SLOTS && GearIndex(item) == place)
+		{
+			wanted = &item;
+			best = 1000;
+		}
 	for (const BuildItem& item : Build.items)
 	{
-		if (item.slot != held.slot)
+		if (item.slot != held.slot || best == 1000)
 			continue;
 		int shared = 0;
+		// The legendary and the special stats say more about which ring is meant than any one stat.
+		for (const LiveAffix& affix : held.affixes)
+		{
+			if (affix.tier == "L" && affix.id == item.legendary) shared += 6;
+			if (affix.tier == "RP" && affix.id == item.smith) shared += 2;
+			if (affix.tier == "MA" && affix.id == item.mastery) shared += 2;
+			if (affix.tier == "AT" && affix.id == item.attribute) shared += 2;
+		}
 		for (const LiveAffix& affix : held.affixes)
 			if (!affix.stat.empty())
 			{
@@ -1070,7 +1094,8 @@ static void MarkTooltip(CInstance* Self, const Build& Build)
 		if (build_id == -2)
 			continue;
 		int build_value = affix.tier == "RP" ? wanted->smith_value : affix.tier == "MA" ? wanted->mastery_value : wanted->attribute_value;
-		Mark mark = affix.id != build_id ? Mark::Wrong : affix.roll >= build_value ? Mark::Match : Mark::Partial;
+		// One the build leaves empty costs nothing, so it is not marked as wrong.
+		Mark mark = build_id < 0 ? Mark::Todo : affix.id != build_id ? Mark::Wrong : affix.roll >= build_value ? Mark::Match : Mark::Partial;
 		for (const RValue& entry : line_list)
 		{
 			std::vector<RValue> fields = entry.IsArray() ? entry.ToVector() : std::vector<RValue>();
