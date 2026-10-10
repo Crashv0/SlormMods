@@ -20,11 +20,12 @@ Appearance g_Appearance;
 bool g_SuppressToggle = false;
 bool g_Visible = true;
 bool g_Marks = true;
-const OutlineStyle OUTLINE_DEFAULTS[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 }, { 4, 0 }, { 3, 0 }, { 4, 0 }, { 3, 0 } };
-OutlineStyle g_Outlines[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 }, { 4, 0 }, { 3, 0 }, { 4, 0 }, { 3, 0 } };
+// For the tooltip's pips the thickness is the pip's size.
+const OutlineStyle OUTLINE_DEFAULTS[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 }, { 11.1f, -8.5f }, { 5.8f, 3.8f }, { 4, 0 }, { 3, 0 }, { 2.7f, 5.1f, 0, 4.1f }, { 12, 0 } };
+OutlineStyle g_Outlines[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 }, { 11.1f, -8.5f }, { 5.8f, 3.8f }, { 4, 0 }, { 3, 0 }, { 2.7f, 5.1f, 0, 4.1f }, { 12, 0 } };
 
-const LabelStyle LABEL_DEFAULTS[LABEL_COUNT] = { { SIDE_BOTTOM, 0, 0 }, { SIDE_BOTTOM, 0, -8 }, { SIDE_LEFT, 0, 0 } };
-LabelStyle g_Labels[LABEL_COUNT] = { { SIDE_BOTTOM, 0, 0 }, { SIDE_BOTTOM, 0, -8 }, { SIDE_LEFT, 0, 0 } };
+const LabelStyle LABEL_DEFAULTS[LABEL_COUNT] = { { SIDE_BOTTOM, 0, 0 }, { SIDE_BOTTOM, 0, -8 }, { SIDE_LEFT, -6, 0 } };
+LabelStyle g_Labels[LABEL_COUNT] = { { SIDE_BOTTOM, 0, 0 }, { SIDE_BOTTOM, 0, -8 }, { SIDE_LEFT, -6, 0 } };
 
 // None, match, partial, wrong, still to place.
 const float MARK_DEFAULTS[MARK_COUNT][3] = { { 1, 1, 1 }, { 0.35f, 0.82f, 0.35f }, { 0.96f, 0.59f, 0.16f }, { 0.94f, 0.24f, 0.24f }, { 0.87f, 0.21f, 0.87f } };
@@ -32,7 +33,7 @@ float g_MarkColors[MARK_COUNT][3] = { { 1, 1, 1 }, { 0.35f, 0.82f, 0.35f }, { 0.
 
 const char* OutlineName(int Kind)
 {
-	static const char* names[] = { "Legacies", "Stone sockets", "Round upgrades", "Square upgrades", "Skills", "Skill bar pickers", "Attributes", "Reapers", "Runes" };
+	static const char* names[] = { "Legacies", "Stone sockets", "Round upgrades", "Square upgrades", "Skills", "Skill bar pickers", "Attributes", "Reapers", "Runes", "Gear slots", "Tooltip pips" };
 	return Kind >= 0 && Kind < OUTLINE_COUNT ? names[Kind] : "";
 }
 
@@ -87,11 +88,14 @@ static void LoadConfig()
 		if (first == "visible") { int flag = 1; words >> flag; g_Visible = flag != 0; continue; }
 		if (first == "outline")
 		{
-			// outline KIND WIDTH GROW
+			// outline KIND WIDTH GROW X Y; older files stop after GROW
 			int kind = -1;
 			OutlineStyle style;
 			if (words >> kind >> style.width >> style.grow && kind >= 0 && kind < OUTLINE_COUNT)
+			{
+				if (!(words >> style.x >> style.y)) style.x = style.y = 0;
 				g_Outlines[kind] = style;
+			}
 			continue;
 		}
 		if (first == "label")
@@ -132,7 +136,7 @@ void SaveConfig()
 	for (const Build& build : g_Builds)
 		file << "build " << build.key << ' ' << build.name << '\n';
 	for (int kind = 0; kind < OUTLINE_COUNT; kind++)
-		file << "outline " << kind << ' ' << g_Outlines[kind].width << ' ' << g_Outlines[kind].grow << '\n';
+		file << "outline " << kind << ' ' << g_Outlines[kind].width << ' ' << g_Outlines[kind].grow << ' ' << g_Outlines[kind].x << ' ' << g_Outlines[kind].y << '\n';
 	for (int kind = 1; kind < MARK_COUNT; kind++)
 		file << "mark_color " << kind << ' ' << g_MarkColors[kind][0] << ' ' << g_MarkColors[kind][1] << ' ' << g_MarkColors[kind][2] << '\n';
 	for (int kind = 0; kind < LABEL_COUNT; kind++)
@@ -173,6 +177,35 @@ static std::vector<int> HeroRow(const RValue& Table, int Hero)
 	return out;
 }
 
+// An item is [header, line, ...]; the header holds its slot's name and its level.
+static LiveItem ReadItem(const RValue& Held)
+{
+	LiveItem item;
+	std::vector<RValue> parts = Held.IsArray() ? Held.ToVector() : std::vector<RValue>();
+	if (parts.size() < 2 || !parts[0].IsArray())
+		return item;
+	item.present = true;
+	std::vector<RValue> header = parts[0].ToVector();
+	if (header.size() > 1 && header[1].IsString()) item.slot = Lower(header[1].ToString());
+	if (header.size() > 2) item.level = static_cast<int>(ToNumber(header[2]));
+	for (size_t i = 1; i < parts.size(); i++)
+	{
+		if (!parts[i].IsArray())
+			continue;
+		std::vector<RValue> fields = parts[i].ToVector();
+		if (fields.size() < 2 || !fields[0].IsString())
+			continue;
+		LiveAffix affix;
+		affix.tier = fields[0].ToString();
+		// Stats name themselves; the rest go by number.
+		if (fields[1].IsString() && affix.tier.size() == 1 && affix.tier != "L") affix.stat = fields[1].ToString();
+		else affix.id = static_cast<int>(ToNumber(fields[1]));
+		if (fields.size() > 2) affix.roll = ToNumber(fields[2]);
+		item.affixes.push_back(std::move(affix));
+	}
+	return item;
+}
+
 static void ReadLive(CInstance* Self)
 {
 	auto global = [](const char* Name) { return g_Yytk->CallBuiltin("variable_global_get", { RValue(Name) }); };
@@ -207,6 +240,26 @@ static void ReadLive(CInstance* Self)
 	}
 	live.activables = HeroRow(global("aura_array"), live.hero);
 	live.attributes = HeroRow(global("traits"), live.hero);
+	// Equipped items head the hero's inventory.
+	RValue bags = global("inventory");
+	if (bags.IsArray())
+	{
+		std::vector<RValue> heroes = bags.ToVector();
+		if (live.hero >= 0 && live.hero < static_cast<int>(heroes.size()) && heroes[live.hero].IsArray())
+			for (int slot = 0; slot < GEAR_SLOTS; slot++)
+				live.gear.push_back(ReadItem(g_Yytk->CallBuiltin("array_get", { heroes[live.hero], RValue(static_cast<double>(slot)) })));
+	}
+#ifdef SLORM_DEV
+	// Which slot each equipped item says it is, once, to check the order.
+	static bool slots_logged = false;
+	if (!slots_logged && !live.gear.empty())
+	{
+		slots_logged = true;
+		std::string order;
+		for (const LiveItem& item : live.gear) order += (item.present ? item.slot : "-") + " ";
+		Log("gear slots in order: %s", order.c_str());
+	}
+#endif
 	RValue reapers = global("current_weapon"), runes = global("fast_check_rune_equipped");
 	if (reapers.IsArray())
 	{
@@ -250,6 +303,139 @@ Mark AttributeMark(const Build& Build, int Id, int& Rank, int& Wanted)
 	if (Rank == Wanted) return Wanted ? Mark::Match : Mark::None;
 	if (Rank > Wanted) return Mark::Wrong;
 	return Rank ? Mark::Partial : Mark::Todo;
+}
+
+// An equipment slot's side on a 1920-wide screen.
+constexpr double GEAR_SLOT_SIZE = 64;
+
+// Where the build's item is worn: the equipped item naming the same slot, the second such for the right ring.
+// An empty slot names nothing, so it falls back to the build's own order. -1 when there is nowhere.
+static int GearIndex(const BuildItem& Item)
+{
+	int skip = Item.index == 7 ? 1 : 0;
+	for (int i = 0; i < static_cast<int>(g_Live.gear.size()); i++)
+		if (g_Live.gear[i].present && g_Live.gear[i].slot == Item.slot && skip-- == 0) return i;
+	bool free = Item.index >= 0 && Item.index < static_cast<int>(g_Live.gear.size()) && !g_Live.gear[Item.index].present;
+	return free ? Item.index : -1;
+}
+
+static const LiveItem* LiveGear(const BuildItem& Item)
+{
+	int index = GearIndex(Item);
+	return index >= 0 && g_Live.gear[index].present ? &g_Live.gear[index] : nullptr;
+}
+
+// The best roll a stat can have. Percent stats roll on a smaller scale on low-level items.
+static double BestRoll(const std::string& Tier, const std::string& Stat, int Level)
+{
+	double base = Tier == "N" ? 100 : Tier == "E" ? 40 : 65;
+	if (!Stat.ends_with("_percent") && !Stat.ends_with("_mult"))
+		return base;
+	int step = Level >= 52 ? 5 : Level >= 45 ? 4 : Level >= 35 ? 3 : Level >= 20 ? 2 : 1;
+	return base * step / 5;
+}
+
+// The roll the build asks of a stat on an item of this level. The planner keeps rolls on the full scale,
+// so a lower one is taken as a share of the best.
+static double WantedRoll(const BuildAffix& Affix, int Level)
+{
+	double full = Affix.tier == "N" ? 100 : Affix.tier == "E" ? 40 : 65, best = BestRoll(Affix.tier, Affix.stat, Level);
+	return Affix.roll >= full ? best : std::round(best * Affix.roll / full);
+}
+
+static std::string Number(double Value)
+{
+	char text[32];
+	snprintf(text, sizeof(text), "%g", Value);
+	return text;
+}
+
+// One of an item's stats against what the build has for that slot: Match, Wrong when the build has no such stat,
+// Partial in another tier or under the build's roll.
+static Mark StatAgainst(const BuildItem& Wanted, const LiveItem& Item, const LiveAffix& Held, std::string& Note)
+{
+	Note.clear();
+	const BuildAffix* other = nullptr;
+	for (const BuildAffix& affix : Wanted.affixes)
+	{
+		if (affix.stat != Held.stat)
+			continue;
+		if (affix.tier != Held.tier)
+		{
+			other = &affix;
+			continue;
+		}
+		double need = WantedRoll(affix, Item.level);
+		if (Held.roll >= need)
+			return Mark::Match;
+		Note = "roll " + Number(Held.roll) + " of " + Number(need);
+		return Mark::Partial;
+	}
+	if (!other)
+		return Mark::Wrong;
+	Note = "in another tier";
+	return Mark::Partial;
+}
+
+Mark GearStatMark(const BuildItem& Item, const BuildAffix& Affix, std::string& Note)
+{
+	Note.clear();
+	const LiveItem* live = LiveGear(Item);
+	if (!live)
+		return Mark::Todo;
+	const LiveAffix* elsewhere = nullptr;
+	for (const LiveAffix& held : live->affixes)
+	{
+		if (held.stat != Affix.stat)
+			continue;
+		if (held.tier != Affix.tier)
+		{
+			elsewhere = &held;
+			continue;
+		}
+		double need = WantedRoll(Affix, live->level);
+		if (held.roll >= need)
+			return Mark::Match;
+		Note = "at roll " + Number(held.roll) + " of " + Number(need);
+		return Mark::Partial;
+	}
+	if (!elsewhere)
+		return Mark::Todo;
+	Note = "in tier " + elsewhere->tier;
+	return Mark::Partial;
+}
+
+Mark GearSpecialMark(const BuildItem& Item, const char* Tier, int Id, int Value, std::string& Note)
+{
+	Note.clear();
+	const LiveItem* live = LiveGear(Item);
+	if (live)
+		for (const LiveAffix& held : live->affixes)
+			if (held.tier == Tier && held.id == Id)
+			{
+				// A legendary with no range has nothing to roll.
+				bool fixed = std::string_view(Tier) == "L" && !LegendaryHasRange(Id);
+				if (fixed || held.roll >= Value)
+					return Mark::Match;
+				Note = "at " + Number(held.roll) + " of " + std::to_string(Value);
+				return Mark::Partial;
+			}
+	return Mark::Todo;
+}
+
+Mark GearMark(const BuildItem& Item)
+{
+	if (!LiveGear(Item))
+		return Mark::Todo;
+	int wanted = 0, found = 0, started = 0;
+	std::string note;
+	auto count = [&](Mark Kind) { wanted++; if (Kind == Mark::Match) found++; if (Kind != Mark::Todo) started++; };
+	for (const BuildAffix& affix : Item.affixes) count(GearStatMark(Item, affix, note));
+	if (Item.smith >= 0) count(GearSpecialMark(Item, "RP", Item.smith, Item.smith_value, note));
+	if (Item.mastery >= 0) count(GearSpecialMark(Item, "MA", Item.mastery, Item.mastery_value, note));
+	if (Item.attribute >= 0) count(GearSpecialMark(Item, "AT", Item.attribute, Item.attribute_value, note));
+	if (Item.legendary >= 0) count(GearSpecialMark(Item, "L", Item.legendary, Item.legendary_value, note));
+	return found == wanted ? Mark::Match : started ? Mark::Partial : Mark::Todo;
 }
 
 Mark RuneMark(const Build& Build, int Id)
@@ -301,12 +487,23 @@ static double MarkColor(Mark Kind)
 	return static_cast<double>(byte(color[0]) | (byte(color[1]) << 8) | (byte(color[2]) << 16));
 }
 
+// Set while the inventory screen shows an item's or a reaper's tooltip.
+static bool g_OnlyHovered = false;
+static double g_MouseX = 0, g_MouseY = 0;
+
 // A ring around the middle of a box, or a frame around the box for the square kinds.
 static void Outline(double Left, double Top, double Right, double Bottom, Mark Kind, OutlineKind Shape)
 {
 	const OutlineStyle& style = g_Outlines[Shape];
+	// With a tooltip up, only what the mouse is on keeps its outline; the tooltip would sit under the rest.
+	if (g_OnlyHovered && (g_MouseX < Left || g_MouseX > Right || g_MouseY < Top || g_MouseY > Bottom))
+		return;
 	double width = std::clamp(static_cast<double>(style.width), 1.0, 20.0), grow = style.grow;
-	if (Shape == OUTLINE_UPGRADE || Shape == OUTLINE_SKILL || Shape == OUTLINE_BAR || Shape == OUTLINE_REAPER)
+	Left += style.x;
+	Right += style.x;
+	Top += style.y;
+	Bottom += style.y;
+	if (Shape == OUTLINE_UPGRADE || Shape == OUTLINE_SKILL || Shape == OUTLINE_BAR || Shape == OUTLINE_REAPER || Shape == OUTLINE_GEAR)
 	{
 		g_Yytk->CallBuiltin("draw_set_color", { RValue(MarkColor(Kind)) });
 		double l = Left - grow, t = Top - grow, r = Right + grow, b = Bottom + grow;
@@ -574,6 +771,140 @@ static void MarkAttributes(CInstance* Self, const Build& Build)
 	}
 }
 
+// The equipment slots on the inventory screen's gear page. The game lists no areas for them,
+// so they are placed as measured on a 1920-wide screen.
+static void MarkGear(CInstance* Self, const Build& Build)
+{
+	RValue page = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("inventory_panel") });
+	if (static_cast<int>(ToNumber(page)) != 0)
+		return;
+	double scale = ToNumber(g_Yytk->CallBuiltin("variable_global_get", { RValue("ui_scale") }));
+	if (scale <= 0)
+		scale = 1;
+	static const double corners[GEAR_SLOTS][2] = {
+		{ 884, 188 }, { 1112, 260 }, { 756, 260 }, { 756, 340 }, { 756, 420 }, { 934, 540 },
+		{ 848, 508 }, { 1020, 508 }, { 984, 188 }, { 1112, 420 }, { 1112, 340 },
+	};
+	for (const BuildItem& item : Build.items)
+	{
+		int index = GearIndex(item);
+		if (index < 0 || index >= GEAR_SLOTS)
+			continue;
+		double x = corners[index][0] * scale, y = corners[index][1] * scale;
+		Outline(x, y, x + GEAR_SLOT_SIZE * scale, y + GEAR_SLOT_SIZE * scale, GearMark(item), OUTLINE_GEAR);
+	}
+}
+
+#ifdef SLORM_DEV
+static std::string Show(const RValue& Value, int Depth, size_t Limit);
+#endif
+
+// A solid square with a thin black edge.
+static void Pip(double X, double Y, Mark Kind)
+{
+	const OutlineStyle& style = g_Outlines[OUTLINE_PIP];
+	double half = std::clamp(static_cast<double>(style.width), 2.0, 40.0) / 2;
+	X += style.x;
+	Y += style.y;
+	g_Yytk->CallBuiltin("draw_set_color", { RValue(0.0) });
+	g_Yytk->CallBuiltin("draw_rectangle", { RValue(X - half - 2), RValue(Y - half - 2), RValue(X + half + 1), RValue(Y + half + 1), RValue(false) });
+	g_Yytk->CallBuiltin("draw_set_color", { RValue(MarkColor(Kind)) });
+	g_Yytk->CallBuiltin("draw_rectangle", { RValue(X - half), RValue(Y - half), RValue(X + half - 1), RValue(Y + half - 1), RValue(false) });
+}
+
+// An item's tooltip: a pip on the bar beside each stat, for whether the build has that stat on that slot.
+// The game keeps where the tooltip is and how far down each line sits.
+static void MarkTooltip(CInstance* Self, const Build& Build)
+{
+	auto get = [&](const char* Name) { return g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue(Name) }); };
+	RValue type = get("tooltip_type"), lines = get("subtooltip_snapping"), panels = get("subtooltip_surfs");
+	if (ToNumber(get("show_tooltip")) == 0 || !type.IsString() || type.ToString() != "item" || !lines.IsArray() || !panels.IsArray())
+		return;
+	std::vector<RValue> panel_list = panels.ToVector();
+	if (panel_list.empty() || !panel_list[0].IsArray())
+		return;
+	// [surface, x, y, ...]
+	std::vector<RValue> panel = panel_list[0].ToVector();
+	if (panel.size() < 3)
+		return;
+	double scale = ToNumber(g_Yytk->CallBuiltin("variable_global_get", { RValue("ui_scale") }));
+	if (scale <= 0)
+		scale = 1;
+	// On a 1920-wide screen the bar runs down the panel 102.75 in from its left, and a line's middle is just above where it starts.
+	double bar = ToNumber(panel[1]) + 102.75 * scale, top = ToNumber(panel[2]) - 0.6 * scale;
+	// A tall tooltip scrolls inside its panel: [surface, x, y, height, width, scrolled].
+	double scrolled = panel.size() > 5 ? ToNumber(panel[5]) : 0;
+	if (scrolled == 0)
+		scrolled = ToNumber(get("subtooltip_surfs_scroll"));
+	double panel_top = ToNumber(panel[2]), panel_bottom = ToNumber(g_Yytk->CallBuiltin("display_get_gui_height", {}));
+	top -= scrolled;
+#ifdef SLORM_DEV
+	// The panel's numbers, logged as they change, to learn how scrolling shows in them.
+	static std::string logged_panel;
+	std::string now = Show(panels, 2, 8) + " scroll " + Show(get("subtooltip_surfs_scroll"), 1, 8);
+	if (now != logged_panel)
+	{
+		logged_panel = now;
+		Log("tooltip panel %s", now.c_str());
+	}
+#endif
+
+	// The item the tooltip is for, by its place in the hero's inventory.
+	RValue bags = g_Yytk->CallBuiltin("variable_global_get", { RValue("inventory") });
+	if (!bags.IsArray())
+		return;
+	std::vector<RValue> heroes = bags.ToVector();
+	if (g_Live.hero < 0 || g_Live.hero >= static_cast<int>(heroes.size()) || !heroes[g_Live.hero].IsArray())
+		return;
+	LiveItem held = ReadItem(g_Yytk->CallBuiltin("array_get", { heroes[g_Live.hero], get("tooltip_value") }));
+	if (!held.present)
+		return;
+
+	// The build's item for that slot; of the two rings, the one this item is closer to.
+	std::string note;
+	const BuildItem* wanted = nullptr;
+	int best = -1;
+	for (const BuildItem& item : Build.items)
+	{
+		if (item.slot != held.slot)
+			continue;
+		int shared = 0;
+		for (const LiveAffix& affix : held.affixes)
+			if (!affix.stat.empty() && StatAgainst(item, held, affix, note) != Mark::Wrong) shared++;
+		if (shared > best)
+		{
+			best = shared;
+			wanted = &item;
+		}
+	}
+	if (!wanted)
+		return;
+
+	// The tooltip groups lines by tier whatever order the item holds them in, so pair them tier by tier.
+	// Only the stat tiers are placed reliably.
+	std::vector<RValue> line_list = lines.ToVector();
+	std::vector<bool> used(line_list.size(), false);
+	for (const LiveAffix& affix : held.affixes)
+	{
+		if (affix.stat.empty())
+			continue;
+		for (size_t line = 0; line < line_list.size(); line++)
+		{
+			if (used[line] || !line_list[line].IsArray())
+				continue;
+			std::vector<RValue> fields = line_list[line].ToVector();
+			if (fields.size() < 2 || !fields[0].IsString() || fields[0].ToString() != affix.tier)
+				continue;
+			used[line] = true;
+			// A line scrolled out of the panel has no pip.
+			double y = top + ToNumber(fields[1]);
+			if (y >= panel_top + 8 * scale && y <= panel_bottom)
+				Pip(bar, y, StatAgainst(*wanted, held, affix, note));
+			break;
+		}
+	}
+}
+
 // Reapers and runes, wherever the inventory screen lists them: the reaper page, the gear page's
 // equipped reaper and runes, and the rune list at the reaper forge.
 static void MarkReaper(CInstance* Self, const Build& Build)
@@ -729,8 +1060,16 @@ static void DrawMarks(CInstance* Self)
 		MarkSkills(Self, build);
 	else if (menu.ToString() == "inventory")
 	{
+		RValue shown = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("show_tooltip") });
+		RValue type = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("tooltip_type") });
+		g_OnlyHovered = ToNumber(shown) != 0 && type.IsString() && (type.ToString() == "item" || type.ToString() == "weapon");
+		g_MouseX = ToNumber(g_Yytk->CallBuiltin("device_mouse_x_to_gui", { RValue(0.0) }));
+		g_MouseY = ToNumber(g_Yytk->CallBuiltin("device_mouse_y_to_gui", { RValue(0.0) }));
 		MarkAttributes(Self, build);
 		MarkReaper(Self, build);
+		MarkGear(Self, build);
+		g_OnlyHovered = false;
+		MarkTooltip(Self, build);
 	}
 	g_Yytk->CallBuiltin("draw_set_halign", { old_halign });
 	g_Yytk->CallBuiltin("draw_set_valign", { old_valign });
@@ -869,6 +1208,19 @@ static void Tick(CInstance* Self, CInstance* Other)
 	}
 
 #ifdef SLORM_DEV
+	// What the mouse is over on the inventory screen, logged as it changes: the slots are not listed anywhere.
+	if (g_Live.menu == "inventory")
+	{
+		auto local = [&](const char* Name) { return g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue(Name) }); };
+		std::string over = Show(local("mouse_above_x"), 0, 0) + "," + Show(local("mouse_above_y"), 0, 0) + " tooltip " + Show(local("tooltip_type"), 1, 8)
+			+ " " + Show(local("tooltip_value"), 1, 8) + " at " + Show(local("tooltip_xx"), 0, 0) + "," + Show(local("tooltip_yy"), 0, 0);
+		static std::string last_over;
+		if (over != last_over)
+		{
+			last_over = over;
+			Log("hover %s", over.c_str());
+		}
+	}
 	static bool dump_key_was_down = false;
 	bool dump_key = (GetAsyncKeyState(DUMP_KEY) & 0x8000) != 0;
 	if (dump_key && !dump_key_was_down)

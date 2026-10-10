@@ -133,6 +133,7 @@ bool ParseBuild(const std::string& Text, Build& Out, std::string& Error)
 		}
 		BuildItem item;
 		item.slot = slots[index];
+		item.index = index;
 		item.label = labels[index];
 		item.level = reader.Take(since(0, 4, 1) ? 7 : 6);
 		item.reinforcement = reader.Take(8);

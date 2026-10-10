@@ -33,6 +33,8 @@ struct BuildItem
 {
 	// The game's name for the slot; both rings are "ring".
 	std::string slot;
+	// Which equipment slot, in the game's order: helm, body, shoulder, bracer, glove, boot, both rings, amulet, belt, cape.
+	int index = 0;
 	std::string label;
 	int level = 0;
 	int reinforcement = 0;
@@ -120,12 +122,15 @@ extern bool g_Visible;
 extern bool g_Marks;
 
 // The shapes the outlines come in, each with its own look.
-enum OutlineKind { OUTLINE_LEGACY, OUTLINE_SOCKET, OUTLINE_PASSIVE, OUTLINE_UPGRADE, OUTLINE_SKILL, OUTLINE_BAR, OUTLINE_ATTRIBUTE, OUTLINE_REAPER, OUTLINE_RUNE, OUTLINE_COUNT };
+enum OutlineKind { OUTLINE_LEGACY, OUTLINE_SOCKET, OUTLINE_PASSIVE, OUTLINE_UPGRADE, OUTLINE_SKILL, OUTLINE_BAR, OUTLINE_ATTRIBUTE, OUTLINE_REAPER, OUTLINE_RUNE, OUTLINE_GEAR, OUTLINE_PIP, OUTLINE_COUNT };
 struct OutlineStyle
 {
 	// Line thickness, and how far outside the icon's edge the line starts; both in screen units.
 	float width = 3;
 	float grow = 0;
+	// Moved across and down by this much.
+	float x = 0;
+	float y = 0;
 };
 extern OutlineStyle g_Outlines[OUTLINE_COUNT];
 extern const OutlineStyle OUTLINE_DEFAULTS[OUTLINE_COUNT];
@@ -155,6 +160,28 @@ bool ParseBuild(const std::string& Text, Build& Out, std::string& Error);
 
 void SaveConfig();
 
+// One line of an equipped item: a stat in its tier, or the reaper smith, mastery, attribute or legendary by id.
+struct LiveAffix
+{
+	// N, D, M, R, E for stats; RP, MA, AT, L for the others.
+	std::string tier;
+	std::string stat;
+	int id = -1;
+	// A stat's roll, or the value of the others.
+	double roll = 0;
+};
+
+struct LiveItem
+{
+	bool present = false;
+	// The game's name for the slot it goes in; both rings are "ring".
+	std::string slot;
+	int level = 0;
+	std::vector<LiveAffix> affixes;
+};
+
+constexpr int GEAR_SLOTS = 11;
+
 // The character being played, read from the game each step.
 struct Live
 {
@@ -176,6 +203,8 @@ struct Live
 	int reaper = -1;
 	// By rune id: 1 when equipped, -1 when the game has not worked it out yet.
 	std::vector<int> runes;
+	// Equipped items by slot, in the game's order.
+	std::vector<LiveItem> gear;
 	// Points put into each attribute.
 	std::vector<int> attributes;
 	// The numbered slots of the skill bar, -1 when empty. Numbered as the build's activables are.
@@ -198,6 +227,13 @@ constexpr int REAPER_COUNT = 120;
 inline int BuildReaperNumber(const Build& Build) { return Build.reaper.id + (Build.reaper.primordial ? REAPER_COUNT : 0); }
 // A rune: in the build and equipped, in it and not, or equipped and not in it. None while the game has no answer.
 Mark RuneMark(const Build& Build, int Id);
+// A stat the build has on an item: Match in the same tier at the build's roll, Todo when it is not on the item,
+// Partial when it is there in another tier or at a lower roll; Note then says which.
+Mark GearStatMark(const BuildItem& Item, const BuildAffix& Affix, std::string& Note);
+// The item's reaper smith, mastery, attribute or legendary, by tier code and id: Partial below the build's value.
+Mark GearSpecialMark(const BuildItem& Item, const char* Tier, int Id, int Value, std::string& Note);
+// The whole item: Match with everything the build lists, Partial with some, Todo with none or an empty slot.
+Mark GearMark(const BuildItem& Item);
 // The game's slot numbers for the two attack skills.
 constexpr int SLOT_PRIMARY = 2;
 constexpr int SLOT_SECONDARY = 3;
@@ -244,6 +280,8 @@ std::string ActivableName(int Id);
 std::string AttributeName(int Id);
 std::string SmithName(int Id);
 std::string LegendaryName(int Id);
+// Whether any of the legendary's values rolls in a range; the rest are fixed whatever the item's roll says.
+bool LegendaryHasRange(int Id);
 std::string UltimatumName(int Id);
 
 bool OverlayInstall(YYTK::YYTKInterface* Yytk);

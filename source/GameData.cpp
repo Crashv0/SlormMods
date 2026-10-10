@@ -18,6 +18,7 @@ struct SkillInfo
 static std::map<int, SkillInfo> g_Skills[3];
 static std::map<int, std::string> g_Smiths, g_Traits, g_Ultimatums, g_Weapons;
 static std::map<int, int> g_LegacyRealms, g_ReaperOrders;
+static std::map<int, bool> g_LegendaryRanges;
 static std::map<int, std::string> g_Legacies, g_Reapers, g_Runes, g_Activables, g_Legendaries;
 
 using Row = std::map<std::string, std::string>;
@@ -226,6 +227,9 @@ void LoadGameData()
 	LoadNames(game / "dat_run.json", "EN_NAME", g_Runes);
 	LoadNames(game / "dat_act.json", "EN_NAME", g_Activables);
 	LoadNames(game / "dat_leg.json", "EN_NAME", g_Legendaries);
+	// RANGE holds a flag per value, as "0|1|0".
+	for (Row& row : LoadTable(game / "dat_leg.json"))
+		if (ToInt(row["REF"]) >= 0) g_LegendaryRanges[ToInt(row["REF"])] = row["RANGE"].find('1') != std::string::npos;
 
 	g_Stats.clear();
 	for (Row& row : LoadTable(game / "dat_sta.json"))
@@ -312,6 +316,12 @@ std::string AttributeName(int Id) { return NameIn(g_Traits, Id, "attribute"); }
 std::string SmithName(int Id) { return NameIn(g_Smiths, Id, "smith"); }
 std::string LegendaryName(int Id) { return NameIn(g_Legendaries, Id, "legendary"); }
 std::string UltimatumName(int Id) { return NameIn(g_Ultimatums, Id, "ultimatum"); }
+
+bool LegendaryHasRange(int Id)
+{
+	auto found = g_LegendaryRanges.find(Id);
+	return found == g_LegendaryRanges.end() || found->second;
+}
 
 int ReaperOrder(int Id)
 {

@@ -242,8 +242,19 @@ static std::string RollText(const BuildAffix& Affix)
 
 static void DrawGear(const Build& Build)
 {
+	bool live = g_Live.valid && g_Live.hero == Build.hero && !g_Live.gear.empty();
 	if (Build.items.empty())
 		ImGui::TextDisabled("no gear");
+	// Whether the item has the line, after the line itself.
+	auto status = [&](Mark Kind, const std::string& Other)
+	{
+		if (!live)
+			return;
+		ImGui::SameLine();
+		if (Kind == Mark::Match) ImGui::TextColored(MarkColor(Kind), "on the item");
+		else if (Kind == Mark::Partial) ImGui::TextColored(MarkColor(Kind), "on the item %s", Other.c_str());
+		else ImGui::TextColored(MarkColor(Mark::Todo), "missing");
+	};
 	for (size_t i = 0; i < Build.items.size(); i++)
 	{
 		const BuildItem& item = Build.items[i];
@@ -251,22 +262,46 @@ static void DrawGear(const Build& Build)
 		std::string title = item.label + ", level " + std::to_string(item.level);
 		if (item.reinforcement > 0) title += " +" + std::to_string(item.reinforcement);
 		if (item.legendary >= 0) title += ", " + LegendaryName(item.legendary);
-		if (ImGui::TreeNode(title.c_str()))
+		if (live)
 		{
+			ImGui::PushStyleColor(ImGuiCol_Text, MarkColor(GearMark(item)));
+		}
+		// The id after ### keeps the node open when its title changes.
+		bool open = ImGui::TreeNode((title + "###item").c_str());
+		if (live)
+			ImGui::PopStyleColor();
+		if (open)
+		{
+			std::string other;
 			for (const BuildAffix& affix : item.affixes)
 			{
 				ImGui::TextColored(affix.pure ? PURE_COLOR : TierColor(affix.tier), "%s", StatName(affix.stat).c_str());
 				ImGui::SameLine();
 				ImGui::TextDisabled("%s%s", RollText(affix).c_str(), affix.pure ? ", pure" : "");
+				Mark mark = live ? GearStatMark(item, affix, other) : Mark::None;
+				status(mark, other);
 			}
 			if (item.smith >= 0)
+			{
 				ImGui::TextColored(TierColor("RP"), "%s Affinity +%d", SmithName(item.smith).c_str(), item.smith_value);
+				status(live ? GearSpecialMark(item, "RP", item.smith, item.smith_value, other) : Mark::None, other);
+			}
 			if (item.mastery >= 0)
+			{
 				ImGui::TextColored(TierColor("MA"), "%s Mastery +%d", SkillName(Build.hero, item.mastery).c_str(), item.mastery_value);
+				status(live ? GearSpecialMark(item, "MA", item.mastery, item.mastery_value, other) : Mark::None, other);
+			}
 			if (item.attribute >= 0)
+			{
 				ImGui::TextColored(AttributeColor(item.attribute), "%s +%d", AttributeName(item.attribute).c_str(), item.attribute_value);
+				status(live ? GearSpecialMark(item, "AT", item.attribute, item.attribute_value, other) : Mark::None, other);
+			}
 			if (item.legendary >= 0)
-				ImGui::TextColored(TierColor("L"), "%s, %d%%", LegendaryName(item.legendary).c_str(), item.legendary_value);
+			{
+				if (LegendaryHasRange(item.legendary)) ImGui::TextColored(TierColor("L"), "%s, %d%%", LegendaryName(item.legendary).c_str(), item.legendary_value);
+				else ImGui::TextColored(TierColor("L"), "%s", LegendaryName(item.legendary).c_str());
+				status(live ? GearSpecialMark(item, "L", item.legendary, item.legendary_value, other) : Mark::None, other);
+			}
 			ImGui::TreePop();
 		}
 		ImGui::PopID();
@@ -551,7 +586,7 @@ static bool DrawOptions()
 		if (ImGui::BeginTabItem("Outlines"))
 		{
 			changed |= ImGui::Checkbox("Outline the build on the game's screens", &g_Marks);
-			ImGui::TextDisabled("Thickness of each line, and how far outside the icon it sits.");
+			ImGui::TextDisabled("Thickness of each line, how far outside the icon it sits, and how far to move it.");
 			for (int kind = 0; kind < OUTLINE_COUNT; kind++)
 			{
 				ImGui::PushID(kind);
@@ -559,7 +594,13 @@ static bool DrawOptions()
 				changed |= ImGui::SliderFloat("##width", &g_Outlines[kind].width, 1, 12, "thick %.1f");
 				ImGui::SameLine();
 				ImGui::SetNextItemWidth(110);
-				changed |= ImGui::SliderFloat("##grow", &g_Outlines[kind].grow, -12, 12, "offset %.1f");
+				changed |= ImGui::SliderFloat("##grow", &g_Outlines[kind].grow, -12, 12, "size %.1f");
+				ImGui::SameLine();
+				ImGui::SetNextItemWidth(80);
+				changed |= ImGui::SliderFloat("##x", &g_Outlines[kind].x, -12, 12, "x %.1f");
+				ImGui::SameLine();
+				ImGui::SetNextItemWidth(80);
+				changed |= ImGui::SliderFloat("##y", &g_Outlines[kind].y, -12, 12, "y %.1f");
 				ImGui::SameLine();
 				ImGui::TextUnformatted(OutlineName(kind));
 				ImGui::PopID();
