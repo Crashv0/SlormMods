@@ -520,6 +520,9 @@ static double g_Unit = 1;
 // Set while the inventory screen shows an item's or a reaper's tooltip.
 static bool g_OnlyHovered = false;
 static double g_MouseX = 0, g_MouseY = 0;
+// Where the open menu rests on screen. A menu's areas are measured from its own corner, and on a
+// screen that is not 16:9 the game centres the menu, so its corner is not the screen's.
+static double g_MenuX = 0, g_MenuY = 0;
 
 // A ring around the middle of a box, or a frame around the box for the square kinds.
 static void Outline(double Left, double Top, double Right, double Bottom, Mark Kind, OutlineKind Shape)
@@ -627,7 +630,7 @@ static void MarkLegacies(CInstance* Self, const Build& Build)
 	RValue old_scissor = g_Yytk->CallBuiltin("gpu_get_scissor", {});
 	double scale_x = ToNumber(g_Yytk->CallBuiltin("window_get_width", {})) / (std::max)(1.0, ToNumber(g_Yytk->CallBuiltin("display_get_gui_width", {})));
 	double scale_y = ToNumber(g_Yytk->CallBuiltin("window_get_height", {})) / (std::max)(1.0, ToNumber(g_Yytk->CallBuiltin("display_get_gui_height", {})));
-	g_Yytk->CallBuiltin("gpu_set_scissor", { RValue(left * scale_x), RValue(top * scale_y), RValue((right - left) * scale_x), RValue((bottom - top) * scale_y) });
+	g_Yytk->CallBuiltin("gpu_set_scissor", { RValue((left + g_MenuX) * scale_x), RValue((top + g_MenuY) * scale_y), RValue((right - left) * scale_x), RValue((bottom - top) * scale_y) });
 
 	for (const RValue& entry : legacies.ToVector())
 	{
@@ -1136,15 +1139,46 @@ static void DrawMarks(CInstance* Self)
 	bool bar = menu.ToString() == "none";
 	if (!bar && position.ToString() != "open")
 		return;
-	// A menu slides in and out; nothing is where it will be until it rests.
-	auto offset = [&](const char* Name) { return std::abs(ToNumber(g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue(Name) }))); };
-	if (!bar && (offset("menu_x_pos") > 0.5 || offset("menu_y_pos") > 0.5))
+	// A menu slides in and out; nothing is where it will be until it rests. Where it rests depends on the
+	// screen's shape, so rest is the position holding still from one frame to the next.
+	auto offset = [&](const char* Name) { return ToNumber(g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue(Name) })); };
+	static double last_x = 0, last_y = 0;
+	double menu_x = offset("menu_x_pos"), menu_y = offset("menu_y_pos");
+	bool moving = std::abs(menu_x - last_x) > 0.01 || std::abs(menu_y - last_y) > 0.01;
+	last_x = menu_x;
+	last_y = menu_y;
+#ifdef SLORM_DEV
+	// The screen's numbers on each menu, to see what changes with its shape.
+	static std::string logged_screen;
+	std::string screen = menu.ToString() + " at rest";
+	if (!moving && screen != logged_screen)
+	{
+		logged_screen = screen;
+		auto number = [](const char* Name) { return ToNumber(g_Yytk->CallBuiltin(Name, {})); };
+		Log("screen on %s: gui %.0fx%.0f, window %.0fx%.0f, ui_scale %.4f, menu at %.2f,%.2f, target %.2f, tree at %.2f,%.2f",
+			menu.ToString().c_str(), number("display_get_gui_width"), number("display_get_gui_height"), number("window_get_width"), number("window_get_height"),
+			ToNumber(g_Yytk->CallBuiltin("variable_global_get", { RValue("ui_scale") })), menu_x, menu_y, offset("menu_y_target"), offset("tree_x"), offset("tree_y"));
+	}
+#endif
+	if (!bar && moving)
 		return;
 	double ui_scale = ToNumber(g_Yytk->CallBuiltin("variable_global_get", { RValue("ui_scale") }));
 	g_Unit = ui_scale > 0 ? ui_scale * 0.75 : 1;
 	RValue old_color = g_Yytk->CallBuiltin("draw_get_color", {}), old_alpha = g_Yytk->CallBuiltin("draw_get_alpha", {});
 	RValue old_halign = g_Yytk->CallBuiltin("draw_get_halign", {}), old_valign = g_Yytk->CallBuiltin("draw_get_valign", {});
 	g_Yytk->CallBuiltin("draw_set_alpha", { RValue(1.0) });
+	// Draw in the menu's own space: everything shifts by where the menu rests.
+	g_MenuX = bar ? 0 : menu_x;
+	g_MenuY = bar ? 0 : menu_y;
+	RValue old_world = g_Yytk->CallBuiltin("matrix_get", { RValue(2.0) });
+	auto shift_world = [&](bool On)
+	{
+		if (!On)
+			g_Yytk->CallBuiltin("matrix_set", { RValue(2.0), old_world });
+		else
+			g_Yytk->CallBuiltin("matrix_set", { RValue(2.0), g_Yytk->CallBuiltin("matrix_build", { RValue(g_MenuX), RValue(g_MenuY), RValue(0.0), RValue(0.0), RValue(0.0), RValue(0.0), RValue(1.0), RValue(1.0), RValue(1.0) }) });
+	};
+	shift_world(true);
 	if (bar)
 		MarkBar(Self, build);
 	else if (menu.ToString() == "elements" || menu.ToString() == "skills")
@@ -1156,21 +1190,26 @@ static void DrawMarks(CInstance* Self)
 		RValue shown = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("show_tooltip") });
 		RValue tip = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("tooltip_surf") });
 		if (ToNumber(shown) != 0 && ToNumber(g_Yytk->CallBuiltin("surface_exists", { tip })) != 0)
+		{
+			// The tooltip's surface covers the screen, not the menu.
+			shift_world(false);
 			g_Yytk->CallBuiltin("draw_surface", { tip, RValue(0.0), RValue(0.0) });
+		}
 	}
 	else if (menu.ToString() == "inventory")
 	{
 		RValue shown = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("show_tooltip") });
 		RValue type = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("tooltip_type") });
 		g_OnlyHovered = ToNumber(shown) != 0 && type.IsString() && (type.ToString() == "item" || type.ToString() == "weapon");
-		g_MouseX = ToNumber(g_Yytk->CallBuiltin("device_mouse_x_to_gui", { RValue(0.0) }));
-		g_MouseY = ToNumber(g_Yytk->CallBuiltin("device_mouse_y_to_gui", { RValue(0.0) }));
+		g_MouseX = ToNumber(g_Yytk->CallBuiltin("device_mouse_x_to_gui", { RValue(0.0) })) - g_MenuX;
+		g_MouseY = ToNumber(g_Yytk->CallBuiltin("device_mouse_y_to_gui", { RValue(0.0) })) - g_MenuY;
 		MarkAttributes(Self, build);
 		MarkReaper(Self, build);
 		MarkGear(Self, build);
 		g_OnlyHovered = false;
 		MarkTooltip(Self, build);
 	}
+	shift_world(false);
 	g_Yytk->CallBuiltin("draw_set_halign", { old_halign });
 	g_Yytk->CallBuiltin("draw_set_valign", { old_valign });
 	g_Yytk->CallBuiltin("draw_set_color", { old_color });
