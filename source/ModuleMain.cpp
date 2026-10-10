@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <map>
 #include <functional>
 #include <unordered_set>
 #include <sstream>
@@ -179,7 +180,65 @@ static std::vector<int> HeroRow(const RValue& Table, int Hero)
 }
 
 // An item is [header, line, ...]; the header holds its slot's name and its level.
-static LiveItem ReadItem(const RValue& Held)
+// The game's own list of what a tier can roll on an item, as the blacksmith shows it.
+static PFUNC_YYGMLScript g_RollStats = nullptr;
+// The UI instance and its partner from the last step, to call game scripts with.
+static CInstance* g_Self = nullptr;
+static CInstance* g_Other = nullptr;
+// Off at the title screen, where there is no character for the game's scripts to work on.
+static bool g_InGame = false;
+
+// Fills in the best roll of each stat on an item. The game is asked once per item and tier, then remembered.
+static void ReadBestRolls(const RValue& Held, LiveItem& Item)
+{
+	if (!g_RollStats || !g_Self || !g_InGame || !Item.present)
+		return;
+	static std::map<std::string, double> known;
+	for (const char* tier : { "N", "D", "M", "R", "E" })
+	{
+		bool any = false;
+		for (const LiveAffix& affix : Item.affixes)
+			if (affix.tier == tier && !affix.stat.empty()) any = true;
+		if (!any)
+			continue;
+		// What can roll depends on the slot, the level and what the item already holds.
+		std::string item_key = Item.slot + ' ' + std::to_string(Item.level) + ' ' + tier;
+		for (const LiveAffix& affix : Item.affixes) item_key += ' ' + affix.tier + affix.stat;
+		if (!known.count(item_key))
+		{
+			known[item_key] = 1;
+			RValue arguments[3] = { Held, RValue(tier), RValue(1.0) };
+			RValue* pointers[3] = { &arguments[0], &arguments[1], &arguments[2] };
+			RValue list;
+			g_RollStats(g_Self, g_Other, list, 3, pointers);
+			std::string seen;
+			if (list.IsArray())
+				for (const RValue& row : list.ToVector())
+				{
+					// [lowest, highest, stat, ...]
+					std::vector<RValue> fields = row.IsArray() ? row.ToVector() : std::vector<RValue>();
+					if (fields.size() < 3 || !fields[2].IsString())
+						continue;
+					known[item_key + '|' + fields[2].ToString()] = ToNumber(fields[1]);
+					for (const LiveAffix& affix : Item.affixes)
+						if (affix.tier == tier && affix.stat == fields[2].ToString())
+							seen += ' ' + affix.stat + " at " + std::to_string(static_cast<int>(affix.roll)) + " of " + std::to_string(static_cast<int>(ToNumber(fields[1])));
+				}
+#ifdef SLORM_DEV
+			Log("best rolls, %s level %d tier %s:%s", Item.slot.c_str(), Item.level, tier, seen.empty() ? " none of the item's stats listed" : seen.c_str());
+#endif
+		}
+		for (LiveAffix& affix : Item.affixes)
+		{
+			if (affix.tier != tier || affix.stat.empty())
+				continue;
+			auto found = known.find(item_key + '|' + affix.stat);
+			if (found != known.end()) affix.best = found->second;
+		}
+	}
+}
+
+static LiveItem ReadItemPlain(const RValue& Held)
 {
 	LiveItem item;
 	std::vector<RValue> parts = Held.IsArray() ? Held.ToVector() : std::vector<RValue>();
@@ -207,6 +266,13 @@ static LiveItem ReadItem(const RValue& Held)
 	return item;
 }
 
+static LiveItem ReadItem(const RValue& Held)
+{
+	LiveItem item = ReadItemPlain(Held);
+	ReadBestRolls(Held, item);
+	return item;
+}
+
 static void ReadLive(CInstance* Self)
 {
 	auto global = [](const char* Name) { return g_Yytk->CallBuiltin("variable_global_get", { RValue(Name) }); };
@@ -216,6 +282,7 @@ static void ReadLive(CInstance* Self)
 	live.hero = static_cast<int>(ToNumber(global("current_hero")));
 	RValue menu = local("menu_show");
 	if (menu.IsString()) live.menu = menu.ToString();
+	g_InGame = live.menu != "main" && !live.menu.empty();
 	// While a screen is open the UI works on its own copies, so Undo can drop them.
 	if (live.menu == "elements")
 	{
@@ -323,11 +390,39 @@ Mark AttributeMark(const Build& Build, int Id, int& Rank, int& Wanted)
 // An equipment slot's side on a 1920-wide screen.
 constexpr double GEAR_SLOT_SIZE = 64;
 
+// How many of the build's stats an item has in the build's tiers.
+static int SharedStats(const BuildItem& Wanted, const LiveItem& Item)
+{
+	int shared = 0;
+	for (const BuildAffix& affix : Wanted.affixes)
+		for (const LiveAffix& held : Item.affixes)
+			if (held.stat == affix.stat && held.tier == affix.tier) shared++;
+	return shared;
+}
+
+// Either ring can go on either hand, so the build's two are paired with the worn two whichever way fits better.
+static bool RingsCrossed()
+{
+	if (g_ActiveBuild < 0 || g_ActiveBuild >= static_cast<int>(g_Builds.size()))
+		return false;
+	const BuildItem* wanted[2] = {};
+	for (const BuildItem& item : g_Builds[g_ActiveBuild].items)
+		if (item.index == 6 || item.index == 7) wanted[item.index - 6] = &item;
+	const LiveItem* worn[2] = {};
+	int found = 0;
+	for (const LiveItem& item : g_Live.gear)
+		if (item.present && item.slot == "ring" && found < 2) worn[found++] = &item;
+	if (!wanted[0] || !wanted[1] || found < 2)
+		return false;
+	return SharedStats(*wanted[0], *worn[1]) + SharedStats(*wanted[1], *worn[0]) > SharedStats(*wanted[0], *worn[0]) + SharedStats(*wanted[1], *worn[1]);
+}
+
 // Where the build's item is worn: the equipped item naming the same slot, the second such for the right ring.
 // An empty slot names nothing, so it falls back to the build's own order. -1 when there is nowhere.
 static int GearIndex(const BuildItem& Item)
 {
 	int skip = Item.index == 7 ? 1 : 0;
+	if ((Item.index == 6 || Item.index == 7) && RingsCrossed()) skip = 1 - skip;
 	for (int i = 0; i < static_cast<int>(g_Live.gear.size()); i++)
 		if (g_Live.gear[i].present && g_Live.gear[i].slot == Item.slot && skip-- == 0) return i;
 	bool free = Item.index >= 0 && Item.index < static_cast<int>(g_Live.gear.size()) && !g_Live.gear[Item.index].present;
@@ -340,7 +435,7 @@ static const LiveItem* LiveGear(const BuildItem& Item)
 	return index >= 0 && g_Live.gear[index].present ? &g_Live.gear[index] : nullptr;
 }
 
-// The best roll a stat can have. Percent stats roll on a smaller scale on low-level items.
+// The best roll a stat can have, for when the game has not said. Percent stats roll on a smaller scale on low-level items.
 static double BestRoll(const std::string& Tier, const std::string& Stat, int Level)
 {
 	double base = Tier == "N" ? 100 : Tier == "E" ? 40 : 65;
@@ -352,9 +447,9 @@ static double BestRoll(const std::string& Tier, const std::string& Stat, int Lev
 
 // The roll the build asks of a stat on an item of this level. The planner keeps rolls on the full scale,
 // so a lower one is taken as a share of the best.
-static double WantedRoll(const BuildAffix& Affix, int Level)
+static double WantedRoll(const BuildAffix& Affix, int Level, double Known)
 {
-	double full = Affix.tier == "N" ? 100 : Affix.tier == "E" ? 40 : 65, best = BestRoll(Affix.tier, Affix.stat, Level);
+	double full = Affix.tier == "N" ? 100 : Affix.tier == "E" ? 40 : 65, best = Known > 0 ? Known : BestRoll(Affix.tier, Affix.stat, Level);
 	return Affix.roll >= full ? best : std::round(best * Affix.roll / full);
 }
 
@@ -380,7 +475,7 @@ static Mark StatAgainst(const BuildItem& Wanted, const LiveItem& Item, const Liv
 			other = &affix;
 			continue;
 		}
-		double need = WantedRoll(affix, Item.level);
+		double need = WantedRoll(affix, Item.level, Held.best);
 		if (Held.roll >= need)
 			return Mark::Match;
 		Note = "roll " + Number(Held.roll) + " of " + Number(need);
@@ -408,7 +503,7 @@ Mark GearStatMark(const BuildItem& Item, const BuildAffix& Affix, std::string& N
 			elsewhere = &held;
 			continue;
 		}
-		double need = WantedRoll(Affix, live->level);
+		double need = WantedRoll(Affix, live->level, held.best);
 		if (held.roll >= need)
 			return Mark::Match;
 		Note = "at roll " + Number(held.roll) + " of " + Number(need);
@@ -929,7 +1024,12 @@ static void MarkTooltip(CInstance* Self, const Build& Build)
 			continue;
 		int shared = 0;
 		for (const LiveAffix& affix : held.affixes)
-			if (!affix.stat.empty() && StatAgainst(item, held, affix, note) != Mark::Wrong) shared++;
+			if (!affix.stat.empty())
+			{
+				// A stat in its tier counts for more than one in another tier.
+				Mark mark = StatAgainst(item, held, affix, note);
+				shared += mark == Mark::Wrong ? 0 : mark == Mark::Partial && note == "in another tier" ? 1 : 2;
+			}
 		if (shared > best)
 		{
 			best = shared;
@@ -1317,6 +1417,8 @@ static void Dump(CInstance* Self)
 
 static void Tick(CInstance* Self, CInstance* Other)
 {
+	g_Self = Self;
+	g_Other = Other;
 	std::lock_guard guard(g_Lock);
 
 	bool key_down = (GetAsyncKeyState(g_Appearance.hotkey) & 0x8000) != 0;
@@ -1470,6 +1572,11 @@ EXPORTED AurieStatus ModuleInitialize(
 	LoadGameData();
 	LoadConfig();
 	OverlaySetIniPath((ModulePath.parent_path() / "SlormHUD.layout.ini").string());
+
+	// Without it, best rolls fall back to a rule of thumb.
+	CScript* roll_stats = nullptr;
+	if (AurieSuccess(g_Yytk->GetNamedRoutinePointer("gml_Script_scr_loot_roll_stats", reinterpret_cast<PVOID*>(&roll_stats))) && roll_stats && roll_stats->m_Functions)
+		g_RollStats = roll_stats->m_Functions->m_ScriptFunction;
 
 	AurieStatus status = g_Yytk->CreateCallback(Module, EVENT_OBJECT_CALL, CodeCallback, 0);
 	if (!AurieSuccess(status))

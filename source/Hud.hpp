@@ -169,6 +169,8 @@ struct LiveAffix
 	int id = -1;
 	// A stat's roll, or the value of the others.
 	double roll = 0;
+	// The best roll the game allows this stat on this item, 0 when not known.
+	double best = 0;
 };
 
 struct LiveItem
