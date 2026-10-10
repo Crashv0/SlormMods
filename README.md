@@ -8,23 +8,28 @@ A collection of mods for The Slormancer, bundled into one. Each mod is off until
 
 On the Mods tab. Walking up to the Mage Academy entrance starts the Bastion without the menu.
 
-- **Auto exit** takes the exit key and the portal when you reach them.
+- **Auto exit** takes the exit key and the portal when you reach them; holding a key (Left Ctrl) keeps you in to pick up loot.
 - **Skip the result screen** closes it as soon as the game allows.
-- A key (Left Ctrl by default) holds the exit back while it is down, to pick up loot.
 
 ### Auto pick Great Forge paths
 
-On its own Forge tab. Each wave, when "Choose your Path" opens, the mod takes the path offering what stands highest in your priority lists.
+On the Forge tab. When "Choose your Path" opens, the mod takes the path that stands highest in your priority lists.
 
-- **Priority lists.** Lists of rewards and challenges, and lists inside lists. Higher lines win. Drag a line onto another to place it above; drag onto the lower half of a list's title to put it inside. A list can be set so any of its lines is as good as another.
-- **Want or avoid.** Each entry is either wanted or avoided. An avoided entry rules out paths offering it for every line below it, so put it above what it should outweigh.
-- **Everything the forge offers.** Challenges, cataclysms, obelisks, Siege Leader modifiers, curses, spirits, quality and quantity rewards, and the War Chest effects of Legendary paths and the rest after the Siege Leader. The add menus have a search that also reads the descriptions.
-- **When nothing listed is offered.** Pick at random, leave the choice to you, always left, middle or right, or the challenge lasting the most waves. A path offered alone is always taken.
-- **Delay and hold key.** A number of seconds before picking, with the pick shown on screen as a countdown; click a path yourself to overrule it. No pick is made while the hold key (Left Ctrl by default) is down.
-- **Pick log.** What was taken on each wave of the run, and whether by a list, by the rule above, or by you.
-- **Save and share.** Lists can be saved under a name, and exported to or imported from the clipboard as one line of text.
+- **Priority lists.** Rewards and challenges in lists, and lists inside lists, reordered by dragging. Higher lines win.
+- **Want or avoid.** An avoided entry rules out its paths for every line below it.
+- **Nothing listed.** Pick at random, leave it to you, always left, middle or right, or the longest challenge.
+- **Delay and hold key.** A countdown shows the pick before it is made; holding a key (Left Ctrl) pauses it.
+- **Pick log.** What was taken on each wave, and by what.
+- **Save and share.** Lists are saved by name, and exported or imported as one line of text.
 
-The countdown's color and position are under Options, Forge.
+### Mark drawings on screen
+
+On the ESP tab. Marks every open breach on the map.
+
+- **Tiers.** Breach I, II, III by waves and Breach V for Chaos, each set to Mark, Avoid or Hide.
+- **Markers.** A line from the hero, a circle, and name and distance text, colored by kind of breach.
+- **Nearest breach.** An arrow by the hero pointing at it.
+- **Hide key.** F8 shows or hides every drawing.
 
 ## Build
 
