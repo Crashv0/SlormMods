@@ -12,6 +12,7 @@ namespace
 	constexpr int MISSION = 31;
 	// How near the hero has to be to the entrance, the key or the portal, in the room's units.
 	constexpr double REACH = 72;
+	constexpr double PORTAL_REACH = 128;
 
 	PFUNC_YYGMLScript g_RunStart = nullptr;
 	PFUNC_YYGMLScript g_CloseButton = nullptr;
@@ -123,23 +124,32 @@ namespace
 			if (g_Mission != MISSION || !auto_exit || (GetAsyncKeyState(hold_key) & 0x8000))
 				return;
 			// Picking up the key opens the portal; using the portal ends the run.
-			static CInstance* taken = nullptr;
+			// By id: a new instance can sit at a destroyed one's address.
+			static double taken = -1;
+			auto id = [](CInstance* Instance) { return g_Yytk->CallBuiltin("variable_instance_get", { RValue(Instance), RValue("id") }).ToDouble(); };
 			CInstance* key = FindInstance("obj_quest_item");
 			CInstance* portal = FindInstance("obj_breach_door");
-			if (!key && !portal)
-				taken = nullptr;
-			if (key && key != taken && Distance(hero, key) < REACH)
+			if (key && id(key) != taken && Distance(hero, key) < REACH)
 			{
-				taken = key;
+				taken = id(key);
 				Log("bastion: taking the exit key");
 				UserEvent(key, 15);
 			}
-			else if (!key && portal && portal != taken && Distance(hero, portal) < REACH)
+			// The portal opens a little off where the key lay, so it reaches further.
+			else if (!key && portal && id(portal) != taken && Distance(hero, portal) < PORTAL_REACH)
 			{
-				taken = portal;
+				taken = id(portal);
 				Log("bastion: taking the exit portal");
 				UserEvent(portal, 14);
 			}
+#ifdef SLORM_DEV
+			static double seen = -1;
+			if (portal && id(portal) != seen)
+			{
+				seen = id(portal);
+				Log("bastion: portal %.0f appears %.0f from the hero, key %s", seen, Distance(hero, portal), key ? "still there" : "gone");
+			}
+#endif
 		}
 
 		bool Draw() override
