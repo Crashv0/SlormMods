@@ -1,5 +1,5 @@
 SlormHUD
-A build planner inside The Slormancer.
+Follow a slorm-planner build inside The Slormancer.
 
 REQUIREMENTS
   The Slormancer on Steam (Windows, 64-bit)
@@ -20,6 +20,11 @@ USE
   outlines on the game's screens; both keys can be changed on the Options
   tab. On the Imports tab, paste a slorm-planner share link and press
   Import.
+
+  Play a character of the build's class and open the ancestral legacy
+  map, the skill screen or the inventory: the build is drawn on it.
+  Green matches the build, orange is partly there, magenta is still to
+  place, red is not in the build.
 
 UNINSTALL
   Delete these from the game folder:
