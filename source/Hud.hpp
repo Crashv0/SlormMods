@@ -120,7 +120,7 @@ extern bool g_Visible;
 extern bool g_Marks;
 
 // The shapes the outlines come in, each with its own look.
-enum OutlineKind { OUTLINE_LEGACY, OUTLINE_SOCKET, OUTLINE_PASSIVE, OUTLINE_UPGRADE, OUTLINE_SKILL, OUTLINE_BAR, OUTLINE_ATTRIBUTE, OUTLINE_COUNT };
+enum OutlineKind { OUTLINE_LEGACY, OUTLINE_SOCKET, OUTLINE_PASSIVE, OUTLINE_UPGRADE, OUTLINE_SKILL, OUTLINE_BAR, OUTLINE_ATTRIBUTE, OUTLINE_REAPER, OUTLINE_RUNE, OUTLINE_COUNT };
 struct OutlineStyle
 {
 	// Line thickness, and how far outside the icon's edge the line starts; both in screen units.
@@ -172,6 +172,10 @@ struct Live
 	std::vector<int> skill_ranks;
 	// By skill or upgrade id: above zero when equipped. Skills hold their slot, upgrades 1.
 	std::vector<int> skill_slots;
+	// The equipped reaper, -1 when unknown. Primordial ones are numbered after the plain ones.
+	int reaper = -1;
+	// By rune id: 1 when equipped, -1 when the game has not worked it out yet.
+	std::vector<int> runes;
 	// Points put into each attribute.
 	std::vector<int> attributes;
 	// The numbered slots of the skill bar, -1 when empty. Numbered as the build's activables are.
@@ -188,6 +192,12 @@ Mark UpgradeMark(const Build& Build, int Id, int& Rank, int& Wanted);
 Mark SkillMark(const Build& Build, int Id);
 // An attribute. Rank and Wanted come back as the points put in and the build's.
 Mark AttributeMark(const Build& Build, int Id, int& Rank, int& Wanted);
+// Reapers each class has; a primordial reaper's number is its plain one plus this.
+constexpr int REAPER_COUNT = 120;
+// The reaper the build has, numbered as the game numbers the equipped one.
+inline int BuildReaperNumber(const Build& Build) { return Build.reaper.id + (Build.reaper.primordial ? REAPER_COUNT : 0); }
+// A rune: in the build and equipped, in it and not, or equipped and not in it. None while the game has no answer.
+Mark RuneMark(const Build& Build, int Id);
 // The game's slot numbers for the two attack skills.
 constexpr int SLOT_PRIMARY = 2;
 constexpr int SLOT_SECONDARY = 3;

@@ -140,13 +140,24 @@ static void DrawSkills(const Build& Build)
 static void DrawReaper(const Build& Build)
 {
 	const BuildReaper& reaper = Build.reaper;
-	ImGui::TextUnformatted(ReaperName(reaper.id, Build.hero, reaper.primordial).c_str());
+	bool live = g_Live.valid && g_Live.hero == Build.hero;
+	std::string name = ReaperName(reaper.id, Build.hero, reaper.primordial);
+	if (!live || g_Live.reaper < 0) ImGui::TextUnformatted(name.c_str());
+	else if (g_Live.reaper == BuildReaperNumber(Build)) ImGui::TextColored(MarkColor(Mark::Match), "%s", name.c_str());
+	else ImGui::TextColored(MarkColor(Mark::Todo), "%s (not equipped)", name.c_str());
 	ImGui::Text("Level %d, affinity %d, mastery %d", reaper.level, reaper.affinity, reaper.mastery);
 	static const char* kinds[] = { "Activation", "Effect", "Enhancement" };
 	for (int i = 0; i < RUNE_COUNT; i++)
 	{
-		if (Build.runes[i].id < 0) ImGui::TextDisabled("%s rune: none", kinds[i]);
-		else ImGui::BulletText("%s, level %d", RuneName(Build.runes[i].id).c_str(), Build.runes[i].rank);
+		if (Build.runes[i].id < 0)
+		{
+			ImGui::TextDisabled("%s rune: none", kinds[i]);
+			continue;
+		}
+		Mark mark = live ? RuneMark(Build, Build.runes[i].id) : Mark::None;
+		std::string rune = RuneName(Build.runes[i].id) + ", level " + std::to_string(Build.runes[i].rank);
+		if (mark == Mark::None) ImGui::BulletText("%s", rune.c_str());
+		else ImGui::TextColored(MarkColor(mark), "%s%s", rune.c_str(), mark == Mark::Todo ? " (not equipped)" : "");
 	}
 	if (Build.ultimatum >= 0)
 		ImGui::Text("%s, level %d", UltimatumName(Build.ultimatum).c_str(), Build.ultimatum_level);

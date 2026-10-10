@@ -20,8 +20,8 @@ Appearance g_Appearance;
 bool g_SuppressToggle = false;
 bool g_Visible = true;
 bool g_Marks = true;
-const OutlineStyle OUTLINE_DEFAULTS[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 }, { 4, 0 }, { 3, 0 } };
-OutlineStyle g_Outlines[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 }, { 4, 0 }, { 3, 0 } };
+const OutlineStyle OUTLINE_DEFAULTS[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 }, { 4, 0 }, { 3, 0 }, { 4, 0 }, { 3, 0 } };
+OutlineStyle g_Outlines[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 }, { 4, 0 }, { 3, 0 }, { 4, 0 }, { 3, 0 } };
 
 const LabelStyle LABEL_DEFAULTS[LABEL_COUNT] = { { SIDE_BOTTOM, 0, 0 }, { SIDE_BOTTOM, 0, -8 }, { SIDE_LEFT, 0, 0 } };
 LabelStyle g_Labels[LABEL_COUNT] = { { SIDE_BOTTOM, 0, 0 }, { SIDE_BOTTOM, 0, -8 }, { SIDE_LEFT, 0, 0 } };
@@ -32,7 +32,7 @@ float g_MarkColors[MARK_COUNT][3] = { { 1, 1, 1 }, { 0.35f, 0.82f, 0.35f }, { 0.
 
 const char* OutlineName(int Kind)
 {
-	static const char* names[] = { "Legacies", "Stone sockets", "Round upgrades", "Square upgrades", "Skills", "Skill bar pickers", "Attributes" };
+	static const char* names[] = { "Legacies", "Stone sockets", "Round upgrades", "Square upgrades", "Skills", "Skill bar pickers", "Attributes", "Reapers", "Runes" };
 	return Kind >= 0 && Kind < OUTLINE_COUNT ? names[Kind] : "";
 }
 
@@ -207,6 +207,14 @@ static void ReadLive(CInstance* Self)
 	}
 	live.activables = HeroRow(global("aura_array"), live.hero);
 	live.attributes = HeroRow(global("traits"), live.hero);
+	RValue reapers = global("current_weapon"), runes = global("fast_check_rune_equipped");
+	if (reapers.IsArray())
+	{
+		std::vector<RValue> held = reapers.ToVector();
+		if (live.hero >= 0 && live.hero < static_cast<int>(held.size())) live.reaper = static_cast<int>(ToNumber(held[live.hero]));
+	}
+	if (runes.IsArray())
+		for (const RValue& rune : runes.ToVector()) live.runes.push_back(static_cast<int>(ToNumber(rune)));
 	live.valid = !live.legacy_ranks.empty() && !live.stones.empty() && !live.realms.empty();
 	g_Live = std::move(live);
 }
@@ -242,6 +250,18 @@ Mark AttributeMark(const Build& Build, int Id, int& Rank, int& Wanted)
 	if (Rank == Wanted) return Wanted ? Mark::Match : Mark::None;
 	if (Rank > Wanted) return Mark::Wrong;
 	return Rank ? Mark::Partial : Mark::Todo;
+}
+
+Mark RuneMark(const Build& Build, int Id)
+{
+	if (Id < 0 || Id >= static_cast<int>(g_Live.runes.size()) || g_Live.runes[Id] < 0)
+		return Mark::None;
+	bool wanted = false;
+	for (const Ranked& rune : Build.runes)
+		if (rune.id == Id) wanted = true;
+	bool equipped = g_Live.runes[Id] > 0;
+	if (wanted) return equipped ? Mark::Match : Mark::Todo;
+	return equipped ? Mark::Wrong : Mark::None;
 }
 
 bool SkillInWrongSlot(const Build& Build, int Id)
@@ -286,7 +306,7 @@ static void Outline(double Left, double Top, double Right, double Bottom, Mark K
 {
 	const OutlineStyle& style = g_Outlines[Shape];
 	double width = std::clamp(static_cast<double>(style.width), 1.0, 20.0), grow = style.grow;
-	if (Shape == OUTLINE_UPGRADE || Shape == OUTLINE_SKILL || Shape == OUTLINE_BAR)
+	if (Shape == OUTLINE_UPGRADE || Shape == OUTLINE_SKILL || Shape == OUTLINE_BAR || Shape == OUTLINE_REAPER)
 	{
 		g_Yytk->CallBuiltin("draw_set_color", { RValue(MarkColor(Kind)) });
 		double l = Left - grow, t = Top - grow, r = Right + grow, b = Bottom + grow;
@@ -554,6 +574,57 @@ static void MarkAttributes(CInstance* Self, const Build& Build)
 	}
 }
 
+// Reapers and runes, wherever the inventory screen lists them: the reaper page, the gear page's
+// equipped reaper and runes, and the rune list at the reaper forge.
+static void MarkReaper(CInstance* Self, const Build& Build)
+{
+	auto get = [&](const char* Name) { return g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue(Name) }); };
+	int wanted = BuildReaperNumber(Build);
+	double scale = ToNumber(g_Yytk->CallBuiltin("variable_global_get", { RValue("ui_scale") }));
+	if (scale <= 0)
+		scale = 1;
+	RValue slots = get("mbas"), areas = get("mba");
+	if (slots.IsArray())
+		for (const RValue& entry : slots.ToVector())
+		{
+			if (!entry.IsArray())
+				continue;
+			// [left, right, top, bottom, reaper, kind, ...]
+			std::vector<RValue> fields = entry.ToVector();
+			if (fields.size() < 6 || !fields[5].IsString())
+				continue;
+			std::string kind = fields[5].ToString();
+			if (kind != "weapon_select" && kind != "weapon_switcher")
+				continue;
+			int id = static_cast<int>(ToNumber(fields[4]));
+			bool held = id == g_Live.reaper;
+			// The list shows a reaper once, plain or primordial.
+			bool build = id == wanted || (kind == "weapon_select" && id % REAPER_COUNT == Build.reaper.id);
+			Mark mark = build ? (g_Live.reaper == wanted ? Mark::Match : Mark::Todo) : held ? Mark::Wrong : Mark::None;
+			// The gear page's reaper slot is drawn a little above the area that takes its clicks.
+			double lift = kind == "weapon_switcher" ? 8 * scale : 0;
+			if (mark != Mark::None)
+				Outline(ToNumber(fields[0]), ToNumber(fields[2]) - lift, ToNumber(fields[1]), ToNumber(fields[3]) - lift, mark, OUTLINE_REAPER);
+		}
+	if (areas.IsArray())
+		for (const RValue& entry : areas.ToVector())
+		{
+			if (!entry.IsArray())
+				continue;
+			// [name, ?, x, y, width, height, ?, sprite, rune]
+			std::vector<RValue> fields = entry.ToVector();
+			if (fields.size() < 9 || !fields[0].IsString())
+				continue;
+			std::string kind = fields[0].ToString();
+			if (kind != "Equip Rune" && kind != "Open Rune")
+				continue;
+			Mark mark = RuneMark(Build, static_cast<int>(ToNumber(fields[8])));
+			double x = ToNumber(fields[2]), y = ToNumber(fields[3]);
+			if (mark != Mark::None)
+				Outline(x, y, x + ToNumber(fields[4]), y + ToNumber(fields[5]), mark, OUTLINE_RUNE);
+		}
+}
+
 // The skill occupying one of the bar's skill slots, -1 for none. The support slot takes whichever support skill is equipped.
 static int SkillInSlot(const Build& Build, int Slot)
 {
@@ -644,7 +715,10 @@ static void DrawMarks(CInstance* Self)
 	else if (menu.ToString() == "skills")
 		MarkSkills(Self, build);
 	else if (menu.ToString() == "inventory")
+	{
 		MarkAttributes(Self, build);
+		MarkReaper(Self, build);
+	}
 	g_Yytk->CallBuiltin("draw_set_halign", { old_halign });
 	g_Yytk->CallBuiltin("draw_set_valign", { old_valign });
 	g_Yytk->CallBuiltin("draw_set_color", { old_color });
