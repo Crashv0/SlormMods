@@ -48,6 +48,16 @@ static constexpr std::array TRACED = {
 	"scr_breach_loot",
 	"scr_story_mission_select",
 	"scr_hub_load_hero",
+	"scr_ui_menu_forge_choice_create",
+	"scr_forge_challenge_add",
+	"scr_forge_challenge_end",
+	"scr_forge_challenge_remove",
+	"scr_forge_challenge_rarity_data",
+	"scr_forge_rewards_apply_effects",
+	"scr_forge_rewards_get_upgrade_result",
+	"scr_ui_menu_war_chest_add_reward",
+	"scr_ui_menu_war_chest_loot",
+	"scr_corrupted_slorm_get_cost_forge",
 };
 static std::array<PFUNC_YYGMLScript, TRACED.size()> g_Originals = {};
 static std::array<std::string, TRACED.size()> g_LastCall;
@@ -102,7 +112,14 @@ static RValue& TraceHook(CInstance* Self, CInstance* Other, RValue& Result, int 
 		g_LastCall[Index] = call;
 		g_LastStep[Index] = g_Step;
 	}
-	return g_Originals[Index](Self, Other, Result, ArgumentCount, Arguments);
+	RValue& result = g_Originals[Index](Self, Other, Result, ArgumentCount, Arguments);
+	// The forge's offers are dumped as soon as they exist.
+	if (std::string_view(TRACED[Index]) == "scr_ui_menu_forge_choice_create")
+	{
+		g_Dev.dump_note = "forge choices";
+		g_Dev.want_dump = true;
+	}
+	return result;
 }
 
 template <size_t... Index>
