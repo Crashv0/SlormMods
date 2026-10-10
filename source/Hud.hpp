@@ -1,0 +1,154 @@
+#pragma once
+#include <YYToolkit/YYTK_Shared.hpp>
+#include <map>
+#include <mutex>
+#include <string>
+#include <vector>
+
+// An id with the rank the build puts in it: a skill upgrade or an ancestral legacy.
+struct Ranked
+{
+	int id = 0;
+	int rank = 0;
+};
+
+struct BuildSkill
+{
+	int id = 0;
+	int level = 0;
+	std::vector<Ranked> upgrades;
+};
+
+struct BuildAffix
+{
+	// N, D, M, R or E.
+	std::string tier;
+	std::string stat;
+	// On the planner's full scale: 100 normal, 65 defense to rare, 40 epic.
+	int roll = 0;
+	bool pure = false;
+};
+
+struct BuildItem
+{
+	// The game's name for the slot; both rings are "ring".
+	std::string slot;
+	std::string label;
+	int level = 0;
+	int reinforcement = 0;
+	std::vector<BuildAffix> affixes;
+	// Ids of the reaper smith, mastery skill, attribute and legendary; -1 for none.
+	int smith = -1, smith_value = 0;
+	int mastery = -1, mastery_value = 0;
+	int attribute = -1, attribute_value = 0;
+	int legendary = -1, legendary_value = 0;
+};
+
+struct BuildReaper
+{
+	int id = 0;
+	bool primordial = false;
+	int level = 0;
+	int affinity = 0;
+	int mastery = 0;
+};
+
+constexpr int ATTRIBUTE_COUNT = 8;
+constexpr int RUNE_COUNT = 3;
+constexpr int ACTIVABLE_COUNT = 4;
+
+// A build imported from a slorm-planner link.
+struct Build
+{
+	std::string name;
+	// The link's last part, kept so the build can be saved and read again.
+	std::string key;
+	// 0 Knight, 1 Huntress, 2 Mage.
+	int hero = 0;
+	int level = 0;
+	BuildReaper reaper;
+	// Activation, effect, enhancement; id -1 for none.
+	Ranked runes[RUNE_COUNT] = { { -1, 0 }, { -1, 0 }, { -1, 0 } };
+	// Stones on the ancestral legacy map, and the legacies they turn on.
+	int first_node = -1;
+	std::vector<int> nodes;
+	std::vector<Ranked> legacies;
+	std::vector<BuildSkill> skills;
+	// Equipped skill ids, -1 for none.
+	int support = -1, primary = -1, secondary = -1;
+	// Reaper or legendary activables below 200, ancestral legacies from 200; -1 for none.
+	int activables[ACTIVABLE_COUNT] = { -1, -1, -1, -1 };
+	std::vector<BuildItem> items;
+	int ultimatum = -1, ultimatum_level = 0;
+	int attributes[ATTRIBUTE_COUNT] = {};
+};
+
+// One row of dat_sta.json; columns kept as text.
+struct StatInfo
+{
+	std::string ref;
+	// name is label plus " %" for percent stats; label is the game's own text.
+	std::string name;
+	std::string label;
+	std::map<std::string, std::string> columns;
+};
+
+// Overlay appearance, saved with the rest of the config.
+struct Appearance
+{
+	int theme = 3;
+	bool custom_accent = false;
+	float accent[3] = { 0.78f, 0.62f, 0.25f };
+	// Title bar, tabs, input fields and table headers.
+	bool custom_primary = false;
+	float primary[3] = { 0.16f, 0.29f, 0.48f };
+	float opacity = 0.95f;
+	float scale = 1.0f;
+	// Virtual-key code that shows or hides the overlay.
+	int hotkey = 0x76;
+};
+
+// Guards everything below; the game step writes it, the overlay reads and edits it.
+extern std::recursive_mutex g_Lock;
+
+extern Appearance g_Appearance;
+// Set while the hotkey is being rebound, so the key press does not also toggle the overlay.
+extern bool g_SuppressToggle;
+extern bool g_Visible;
+
+extern std::vector<Build> g_Builds;
+// Build shown on the Build tab, -1 for none.
+extern int g_ActiveBuild;
+bool ParseBuild(const std::string& Text, Build& Out, std::string& Error);
+
+void SaveConfig();
+
+inline std::string Lower(std::string Text)
+{
+	for (char& c : Text) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+	return Text;
+}
+
+extern std::vector<StatInfo> g_Stats;
+void LoadGameData();
+const StatInfo* FindStat(const std::string& Ref);
+const StatInfo* StatById(int Id);
+std::string StatName(const std::string& Ref);
+const char* HeroName(int Class);
+// Skills and their upgrades share one id space per class.
+std::string SkillName(int Hero, int Id);
+// The skill an upgrade belongs to, -1 when it is not an upgrade.
+int UpgradeParent(int Hero, int Id);
+std::string LegacyName(int Id);
+std::string ReaperName(int Id, int Hero, bool Primordial);
+std::string RuneName(int Id);
+std::string ActivableName(int Id);
+std::string AttributeName(int Id);
+std::string SmithName(int Id);
+std::string LegendaryName(int Id);
+std::string UltimatumName(int Id);
+
+bool OverlayInstall(YYTK::YYTKInterface* Yytk);
+bool OverlayWantsMouse();
+bool OverlayWantsKeys();
+void OverlaySetIniPath(const std::string& Path);
