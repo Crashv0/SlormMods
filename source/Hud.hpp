@@ -115,6 +115,8 @@ extern Appearance g_Appearance;
 // Set while the hotkey is being rebound, so the key press does not also toggle the overlay.
 extern bool g_SuppressToggle;
 extern bool g_Visible;
+// Outline the build on the game's own screens.
+extern bool g_Marks;
 
 extern std::vector<Build> g_Builds;
 // Build shown on the Build tab, -1 for none.
@@ -122,6 +124,31 @@ extern int g_ActiveBuild;
 bool ParseBuild(const std::string& Text, Build& Out, std::string& Error);
 
 void SaveConfig();
+
+// The character being played, read from the game each step.
+struct Live
+{
+	bool valid = false;
+	int hero = 0;
+	// Menu the game's UI shows: "none", "elements", ...
+	std::string menu;
+	// By legacy id.
+	std::vector<int> legacy_ranks;
+	// By stone slot: 1 for a stone, 2 for the first stone.
+	std::vector<int> stones;
+	// By realm, the tile a legacy sits on: not zero when stones turn it on.
+	std::vector<int> realms;
+};
+extern Live g_Live;
+
+#ifdef SLORM_DEV
+// Dev builds only: write the game's variables to SlormHUD.dump.txt on the next step.
+extern bool g_WantDump;
+extern std::string g_DumpNote;
+extern std::string g_DumpResult;
+// Dumps without moving the mouse.
+constexpr int DUMP_KEY = 0x78;
+#endif
 
 inline std::string Lower(std::string Text)
 {
@@ -140,6 +167,8 @@ std::string SkillName(int Hero, int Id);
 // The skill an upgrade belongs to, -1 when it is not an upgrade.
 int UpgradeParent(int Hero, int Id);
 std::string LegacyName(int Id);
+// The tile of the ancestral legacy map a legacy sits on, -1 when unknown.
+int LegacyRealm(int Id);
 std::string ReaperName(int Id, int Hero, bool Primordial);
 std::string RuneName(int Id);
 std::string ActivableName(int Id);

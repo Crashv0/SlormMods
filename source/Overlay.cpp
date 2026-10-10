@@ -127,14 +127,55 @@ static void DrawReaper(const Build& Build)
 		ImGui::Text("%s, level %d", UltimatumName(Build.ultimatum).c_str(), Build.ultimatum_level);
 }
 
+static const ImVec4 MATCH_COLOR = { 0.45f, 0.85f, 0.45f, 1.0f };
+static const ImVec4 PARTIAL_COLOR = { 0.95f, 0.8f, 0.3f, 1.0f };
+
+static int At(const std::vector<int>& Values, int Index)
+{
+	return Index >= 0 && Index < static_cast<int>(Values.size()) ? Values[Index] : 0;
+}
+
 static void DrawLegacy(const Build& Build)
 {
-	int stones = static_cast<int>(Build.nodes.size()) + (Build.first_node >= 0 ? 1 : 0);
-	ImGui::TextDisabled("%d stones placed", stones);
+	std::vector<int> wanted = Build.nodes;
+	if (Build.first_node >= 0) wanted.push_back(Build.first_node);
+	bool live = g_Live.valid && g_Live.hero == Build.hero;
+	if (g_Live.valid && !live)
+		ImGui::TextDisabled("Playing a %s; this build is for a %s.", HeroName(g_Live.hero), HeroName(Build.hero));
+	if (!live)
+	{
+		ImGui::TextDisabled("%d stones placed", static_cast<int>(wanted.size()));
+		if (Build.legacies.empty())
+			ImGui::TextDisabled("no legacies");
+		for (const Ranked& legacy : Build.legacies)
+			ImGui::BulletText("%s, rank %d", LegacyName(legacy.id).c_str(), legacy.rank);
+		return;
+	}
+
+	int placed = 0, extra = 0;
+	for (int stone : wanted)
+		if (At(g_Live.stones, stone)) placed++;
+	for (size_t i = 0; i < g_Live.stones.size(); i++)
+		if (g_Live.stones[i] && std::find(wanted.begin(), wanted.end(), static_cast<int>(i)) == wanted.end()) extra++;
+	bool stones_match = placed == static_cast<int>(wanted.size()) && !extra;
+	std::string stones = std::to_string(placed) + " of " + std::to_string(wanted.size()) + " stones placed";
+	if (extra) stones += ", " + std::to_string(extra) + " not in the build";
+	ImGui::TextColored(stones_match ? MATCH_COLOR : ERROR_COLOR, "%s", stones.c_str());
+
 	if (Build.legacies.empty())
 		ImGui::TextDisabled("no legacies");
 	for (const Ranked& legacy : Build.legacies)
-		ImGui::BulletText("%s, rank %d", LegacyName(legacy.id).c_str(), legacy.rank);
+	{
+		bool active = At(g_Live.realms, LegacyRealm(legacy.id)) != 0;
+		int rank = At(g_Live.legacy_ranks, legacy.id);
+		std::string name = LegacyName(legacy.id);
+		if (!active)
+			ImGui::TextColored(ERROR_COLOR, "%s, rank %d: not active", name.c_str(), legacy.rank);
+		else if (rank != legacy.rank)
+			ImGui::TextColored(PARTIAL_COLOR, "%s: rank %d, build has %d", name.c_str(), rank, legacy.rank);
+		else
+			ImGui::TextColored(MATCH_COLOR, "%s, rank %d", name.c_str(), legacy.rank);
+	}
 }
 
 static void DrawAttributes(const Build& Build)
@@ -455,6 +496,7 @@ static bool DrawOptions()
 		g_Appearance.scale = scale;
 		restyle = true;
 	}
+	changed |= ImGui::Checkbox("Outline the build on the game's screens", &g_Marks);
 	if (ImGui::Button("Reset appearance"))
 	{
 		int hotkey = g_Appearance.hotkey;
@@ -507,6 +549,33 @@ static bool DrawOptions()
 	return changed || restyle;
 }
 
+#ifdef SLORM_DEV
+static void DrawDev()
+{
+	ImGui::TextDisabled("Dev build. Writes the game's variables to mods/Aurie/SlormHUD.dump.txt.");
+	ImGui::TextDisabled("F9 dumps too, without moving the mouse.");
+	ImGuiIO& io = ImGui::GetIO();
+	ImGui::Text("Overlay takes: mouse %s, keys %s", io.WantCaptureMouse ? "yes" : "no", io.WantTextInput ? "yes" : "no");
+	static char note[64] = "";
+	ImGui::SetNextItemWidth(260);
+	ImGui::InputTextWithHint("##note", "what is on screen", note, sizeof(note));
+	ImGui::SameLine();
+	if (ImGui::Button("Dump"))
+	{
+		g_DumpNote = note;
+		g_WantDump = true;
+	}
+	static const char* quick[] = { "legacy screen open", "legacy screen closed", "after placing a stone", "after ranking a legacy" };
+	for (const char* label : quick)
+		if (ImGui::Button(label))
+		{
+			g_DumpNote = label;
+			g_WantDump = true;
+		}
+	if (!g_DumpResult.empty())
+		ImGui::TextUnformatted(g_DumpResult.c_str());
+}
+#endif
 
 static void DrawWindow()
 {
@@ -539,6 +608,13 @@ static void DrawWindow()
 			changed |= DrawOptions();
 			ImGui::EndTabItem();
 		}
+#ifdef SLORM_DEV
+		if (ImGui::BeginTabItem("Dev"))
+		{
+			DrawDev();
+			ImGui::EndTabItem();
+		}
+#endif
 		ImGui::EndTabBar();
 	}
 

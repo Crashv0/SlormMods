@@ -17,6 +17,7 @@ struct SkillInfo
 };
 static std::map<int, SkillInfo> g_Skills[3];
 static std::map<int, std::string> g_Smiths, g_Traits, g_Ultimatums, g_Weapons;
+static std::map<int, int> g_LegacyRealms;
 static std::map<int, std::string> g_Legacies, g_Reapers, g_Runes, g_Activables, g_Legendaries;
 
 using Row = std::map<std::string, std::string>;
@@ -217,6 +218,8 @@ void LoadGameData()
 		}
 	}
 	LoadNames(game / "dat_ele.json", "EN_NAME", g_Legacies);
+	for (Row& row : LoadTable(game / "dat_ele.json"))
+		if (ToInt(row["REF"]) >= 0) g_LegacyRealms[ToInt(row["REF"])] = ToInt(row["REALM"]);
 	LoadNames(game / "dat_rea.json", "EN_NAME", g_Reapers);
 	LoadNames(game / "dat_run.json", "EN_NAME", g_Runes);
 	LoadNames(game / "dat_act.json", "EN_NAME", g_Activables);
@@ -285,6 +288,12 @@ int UpgradeParent(int Hero, int Id)
 		return -1;
 	auto found = g_Skills[Hero].find(Id);
 	return found != g_Skills[Hero].end() ? found->second.parent : -1;
+}
+
+int LegacyRealm(int Id)
+{
+	auto found = g_LegacyRealms.find(Id);
+	return found != g_LegacyRealms.end() ? found->second : -1;
 }
 
 std::string LegacyName(int Id) { return NameIn(g_Legacies, Id, "legacy"); }
