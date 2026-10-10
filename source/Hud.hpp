@@ -120,7 +120,7 @@ extern bool g_Visible;
 extern bool g_Marks;
 
 // The shapes the outlines come in, each with its own look.
-enum OutlineKind { OUTLINE_LEGACY, OUTLINE_SOCKET, OUTLINE_PASSIVE, OUTLINE_UPGRADE, OUTLINE_SKILL, OUTLINE_BAR, OUTLINE_COUNT };
+enum OutlineKind { OUTLINE_LEGACY, OUTLINE_SOCKET, OUTLINE_PASSIVE, OUTLINE_UPGRADE, OUTLINE_SKILL, OUTLINE_BAR, OUTLINE_ATTRIBUTE, OUTLINE_COUNT };
 struct OutlineStyle
 {
 	// Line thickness, and how far outside the icon's edge the line starts; both in screen units.
@@ -131,7 +131,7 @@ extern OutlineStyle g_Outlines[OUTLINE_COUNT];
 extern const OutlineStyle OUTLINE_DEFAULTS[OUTLINE_COUNT];
 const char* OutlineName(int Kind);
 // Where the rank text sits against its icon, per screen.
-enum LabelKind { LABEL_LEGACY, LABEL_UPGRADE, LABEL_COUNT };
+enum LabelKind { LABEL_LEGACY, LABEL_UPGRADE, LABEL_ATTRIBUTE, LABEL_COUNT };
 enum LabelSide { SIDE_BOTTOM, SIDE_TOP, SIDE_LEFT, SIDE_RIGHT, SIDE_COUNT };
 struct LabelStyle
 {
@@ -172,6 +172,8 @@ struct Live
 	std::vector<int> skill_ranks;
 	// By skill or upgrade id: above zero when equipped. Skills hold their slot, upgrades 1.
 	std::vector<int> skill_slots;
+	// Points put into each attribute.
+	std::vector<int> attributes;
 	// The numbered slots of the skill bar, -1 when empty. Numbered as the build's activables are.
 	std::vector<int> activables;
 };
@@ -184,6 +186,8 @@ enum class Mark { None, Match, Partial, Wrong, Todo };
 Mark UpgradeMark(const Build& Build, int Id, int& Rank, int& Wanted);
 // A skill: whether it is equipped as the build has it, and its upgrades with it.
 Mark SkillMark(const Build& Build, int Id);
+// An attribute. Rank and Wanted come back as the points put in and the build's.
+Mark AttributeMark(const Build& Build, int Id, int& Rank, int& Wanted);
 // The game's slot numbers for the two attack skills.
 constexpr int SLOT_PRIMARY = 2;
 constexpr int SLOT_SECONDARY = 3;

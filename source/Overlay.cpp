@@ -202,6 +202,7 @@ static void DrawLegacy(const Build& Build)
 
 static void DrawAttributes(const Build& Build)
 {
+	bool live = g_Live.valid && g_Live.hero == Build.hero && !g_Live.attributes.empty();
 	if (!ImGui::BeginTable("attributes", 2, ImGuiTableFlags_SizingFixedFit))
 		return;
 	for (int id = 0; id < ATTRIBUTE_COUNT; id++)
@@ -210,7 +211,10 @@ static void DrawAttributes(const Build& Build)
 		ImGui::TableNextColumn();
 		ImGui::TextColored(AttributeColor(id), "%s", AttributeName(id).c_str());
 		ImGui::TableNextColumn();
-		if (Build.attributes[id] > 0) ImGui::Text("%d", Build.attributes[id]);
+		int rank = 0, wanted = Build.attributes[id];
+		Mark mark = live ? AttributeMark(Build, id, rank, wanted) : Mark::None;
+		if (live && rank != wanted) ImGui::TextColored(MarkColor(mark), "%d %s %d", rank, rank < wanted ? "<" : ">", wanted);
+		else if (wanted > 0) ImGui::TextColored(MarkColor(mark), "%d", wanted);
 		else ImGui::TextDisabled("0");
 	}
 	ImGui::EndTable();
@@ -559,7 +563,7 @@ static bool DrawOptions()
 		if (ImGui::BeginTabItem("Rank text"))
 		{
 			ImGui::TextDisabled("Where the rank text sits, and how far to move it from there.");
-			static const char* label_names[] = { "Legacy ranks", "Upgrade ranks" };
+			static const char* label_names[] = { "Legacy ranks", "Upgrade ranks", "Attribute points" };
 			static const char* sides[] = { "Bottom", "Top", "Left", "Right" };
 			for (int kind = 0; kind < LABEL_COUNT; kind++)
 			{

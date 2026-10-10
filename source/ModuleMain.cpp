@@ -20,11 +20,11 @@ Appearance g_Appearance;
 bool g_SuppressToggle = false;
 bool g_Visible = true;
 bool g_Marks = true;
-const OutlineStyle OUTLINE_DEFAULTS[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 }, { 4, 0 } };
-OutlineStyle g_Outlines[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 }, { 4, 0 } };
+const OutlineStyle OUTLINE_DEFAULTS[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 }, { 4, 0 }, { 3, 0 } };
+OutlineStyle g_Outlines[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 }, { 4, 0 }, { 3, 0 } };
 
-const LabelStyle LABEL_DEFAULTS[LABEL_COUNT] = { { SIDE_BOTTOM, 0, 0 }, { SIDE_BOTTOM, 0, -8 } };
-LabelStyle g_Labels[LABEL_COUNT] = { { SIDE_BOTTOM, 0, 0 }, { SIDE_BOTTOM, 0, -8 } };
+const LabelStyle LABEL_DEFAULTS[LABEL_COUNT] = { { SIDE_BOTTOM, 0, 0 }, { SIDE_BOTTOM, 0, -8 }, { SIDE_LEFT, 0, 0 } };
+LabelStyle g_Labels[LABEL_COUNT] = { { SIDE_BOTTOM, 0, 0 }, { SIDE_BOTTOM, 0, -8 }, { SIDE_LEFT, 0, 0 } };
 
 // None, match, partial, wrong, still to place.
 const float MARK_DEFAULTS[MARK_COUNT][3] = { { 1, 1, 1 }, { 0.35f, 0.82f, 0.35f }, { 0.96f, 0.59f, 0.16f }, { 0.94f, 0.24f, 0.24f }, { 0.87f, 0.21f, 0.87f } };
@@ -32,7 +32,7 @@ float g_MarkColors[MARK_COUNT][3] = { { 1, 1, 1 }, { 0.35f, 0.82f, 0.35f }, { 0.
 
 const char* OutlineName(int Kind)
 {
-	static const char* names[] = { "Legacies", "Stone sockets", "Round upgrades", "Square upgrades", "Skills", "Skill bar pickers" };
+	static const char* names[] = { "Legacies", "Stone sockets", "Round upgrades", "Square upgrades", "Skills", "Skill bar pickers", "Attributes" };
 	return Kind >= 0 && Kind < OUTLINE_COUNT ? names[Kind] : "";
 }
 
@@ -206,6 +206,7 @@ static void ReadLive(CInstance* Self)
 		live.skill_slots = HeroRow(global("skill_equipped"), live.hero);
 	}
 	live.activables = HeroRow(global("aura_array"), live.hero);
+	live.attributes = HeroRow(global("traits"), live.hero);
 	live.valid = !live.legacy_ranks.empty() && !live.stones.empty() && !live.realms.empty();
 	g_Live = std::move(live);
 }
@@ -232,6 +233,15 @@ Mark UpgradeMark(const Build& Build, int Id, int& Rank, int& Wanted)
 	}
 	if (!equipped) return Mark::Todo;
 	return Rank == Wanted ? Mark::Match : Rank == 0 ? Mark::Wrong : Mark::Partial;
+}
+
+Mark AttributeMark(const Build& Build, int Id, int& Rank, int& Wanted)
+{
+	Wanted = Id >= 0 && Id < ATTRIBUTE_COUNT ? Build.attributes[Id] : 0;
+	Rank = At(g_Live.attributes, Id);
+	if (Rank == Wanted) return Wanted ? Mark::Match : Mark::None;
+	if (Rank > Wanted) return Mark::Wrong;
+	return Rank ? Mark::Partial : Mark::Todo;
 }
 
 bool SkillInWrongSlot(const Build& Build, int Id)
@@ -296,13 +306,17 @@ static void Outline(double Left, double Top, double Right, double Bottom, Mark K
 	constexpr double nudge = 0.75;
 	double x = (Left + Right) / 2 - nudge, y = (Top + Bottom) / 2 - nudge, radius = (std::max)(1.0, (Right - Left) / 2 + grow);
 	// Drawn as a strip of triangles: the game's own circle lands off the centre.
-	constexpr int steps = 40;
+	// Four steps make a square stood on its corner, as the attribute icons are.
+	bool diamond = Shape == OUTLINE_ATTRIBUTE;
+	int steps = diamond ? 4 : 40;
+	// Corner to corner the line is wider than it is across.
+	double outer = radius + (diamond ? width * 1.41421356 : width);
 	g_Yytk->CallBuiltin("draw_primitive_begin", { RValue(5.0) });
 	for (int i = 0; i <= steps; i++)
 	{
 		double angle = i * 6.283185307179586 / steps, across = cos(angle), down = sin(angle);
 		g_Yytk->CallBuiltin("draw_vertex", { RValue(x + across * radius), RValue(y + down * radius) });
-		g_Yytk->CallBuiltin("draw_vertex", { RValue(x + across * (radius + width)), RValue(y + down * (radius + width)) });
+		g_Yytk->CallBuiltin("draw_vertex", { RValue(x + across * outer), RValue(y + down * outer) });
 	}
 	g_Yytk->CallBuiltin("draw_primitive_end", {});
 }
@@ -466,6 +480,80 @@ static void MarkSkills(CInstance* Self, const Build& Build)
 	}
 }
 
+// The attributes on the inventory screen: an outline on each icon, and a tick on its bar where the build stops.
+// The game lists the panel's areas only while there is a point to spend, so the layout is kept from a
+// 1920-wide screen and corrected by the areas whenever they are there.
+static void MarkAttributes(CInstance* Self, const Build& Build)
+{
+	// The inventory screen has three pages: gear, reapers, attributes.
+	RValue page = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("inventory_panel") });
+	if (static_cast<int>(ToNumber(page)) != 2)
+		return;
+	double scale = ToNumber(g_Yytk->CallBuiltin("variable_global_get", { RValue("ui_scale") }));
+	if (scale <= 0)
+		scale = 1;
+	struct Row { double x, y, size, bar_left, bar_top, bar_height; };
+	static Row rows[ATTRIBUTE_COUNT];
+	static double rows_scale = 0;
+	if (rows_scale != scale)
+	{
+		rows_scale = scale;
+		for (int id = 0; id < ATTRIBUTE_COUNT; id++)
+			rows[id] = { (id % 2 ? 774 : 790) * scale, (359 + 60 * id) * scale, 36 * scale, 838 * scale, (367 + 60 * id) * scale, 20 * scale };
+	}
+
+	RValue areas = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("mba") });
+	if (areas.IsArray())
+	{
+		bool bar_seen[ATTRIBUTE_COUNT] = {};
+		for (const RValue& entry : areas.ToVector())
+		{
+			if (!entry.IsArray())
+				continue;
+			// [name, ?, x, y, width, height, ?, sprite, "attribute|direction" or "attribute|direction|kind"]
+			std::vector<RValue> fields = entry.ToVector();
+			if (fields.size() < 9 || !fields[0].IsString() || fields[0].ToString() != "character_plus_trait" || !fields[8].IsString())
+				continue;
+			std::string tag = fields[8].ToString();
+			int id = atoi(tag.c_str());
+			if (id < 0 || id >= ATTRIBUTE_COUNT)
+				continue;
+			double x = ToNumber(fields[2]), y = ToNumber(fields[3]), width = ToNumber(fields[4]), height = ToNumber(fields[5]);
+			if (tag.size() > 4 && tag.compare(tag.size() - 4, 4, "|big") == 0)
+			{
+				rows[id].x = x;
+				rows[id].y = y;
+				rows[id].size = width;
+			}
+			// The bar comes as up to two areas, the points in and the points left; it starts at the leftmost.
+			else if (std::count(tag.begin(), tag.end(), '|') == 1 && (!bar_seen[id] || x < rows[id].bar_left))
+			{
+				bar_seen[id] = true;
+				rows[id].bar_left = x;
+				rows[id].bar_top = y;
+				rows[id].bar_height = height;
+			}
+		}
+	}
+
+	for (int id = 0; id < ATTRIBUTE_COUNT; id++)
+	{
+		const Row& row = rows[id];
+		int rank = 0, wanted = 0;
+		Mark mark = AttributeMark(Build, id, rank, wanted);
+		if (mark == Mark::None)
+			continue;
+		Outline(row.x, row.y, row.x + row.size, row.y + row.size, mark, OUTLINE_ATTRIBUTE);
+		if (rank == wanted)
+			continue;
+		Label(row.x, row.y, row.x + row.size, row.y + row.size, std::to_string(rank) + (rank < wanted ? "<" : ">") + std::to_string(wanted), mark, LABEL_ATTRIBUTE, OUTLINE_ATTRIBUTE);
+		// The first point starts 32 in, and each is 8 wide.
+		double at = row.bar_left + (32 + 8 * wanted) * scale;
+		g_Yytk->CallBuiltin("draw_set_color", { RValue(MarkColor(mark)) });
+		g_Yytk->CallBuiltin("draw_rectangle", { RValue(at - 2 * scale), RValue(row.bar_top - 4 * scale), RValue(at + 2 * scale - 1), RValue(row.bar_top + row.bar_height + 4 * scale - 1), RValue(false) });
+	}
+}
+
 // The skill occupying one of the bar's skill slots, -1 for none. The support slot takes whichever support skill is equipped.
 static int SkillInSlot(const Build& Build, int Slot)
 {
@@ -555,6 +643,8 @@ static void DrawMarks(CInstance* Self)
 		MarkLegacies(Self, build);
 	else if (menu.ToString() == "skills")
 		MarkSkills(Self, build);
+	else if (menu.ToString() == "inventory")
+		MarkAttributes(Self, build);
 	g_Yytk->CallBuiltin("draw_set_halign", { old_halign });
 	g_Yytk->CallBuiltin("draw_set_valign", { old_valign });
 	g_Yytk->CallBuiltin("draw_set_color", { old_color });
