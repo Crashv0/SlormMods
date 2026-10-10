@@ -1,6 +1,7 @@
 #include "Hud.hpp"
 #include "Version.hpp"
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <imgui_impl_dx11.h>
 #include <imgui_impl_win32.h>
 #include <algorithm>
@@ -160,7 +161,13 @@ static void DrawReaper(const Build& Build)
 		else ImGui::TextColored(MarkColor(mark), "%s%s", rune.c_str(), mark == Mark::Todo ? " (not equipped)" : "");
 	}
 	if (Build.ultimatum >= 0)
-		ImGui::Text("%s, level %d", UltimatumName(Build.ultimatum).c_str(), Build.ultimatum_level);
+	{
+		Mark mark = live ? UltimatumMark(Build, Build.ultimatum) : Mark::None;
+		std::string text = UltimatumName(Build.ultimatum) + ", level " + std::to_string(Build.ultimatum_level);
+		if (mark == Mark::Todo) text += " (not equipped)";
+		else if (mark == Mark::Partial) text += " (at level " + std::to_string(g_Live.ultimatum_level) + ")";
+		ImGui::TextColored(MarkColor(mark), "%s", text.c_str());
+	}
 }
 
 static int At(const std::vector<int>& Values, int Index)
@@ -536,6 +543,20 @@ static void ApplyAppearance()
 }
 
 
+// A slider that goes back to its default on a right click or a double click.
+static bool Slider(const char* Label, float* Value, float Low, float High, const char* Format, float Default)
+{
+	bool changed = ImGui::SliderFloat(Label, Value, Low, High, Format);
+	if (ImGui::IsItemHovered() && (ImGui::IsMouseClicked(ImGuiMouseButton_Right) || ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)))
+	{
+		// Let go of the slider, or the held button drags it straight back.
+		ImGui::ClearActiveID();
+		changed |= *Value != Default;
+		*Value = Default;
+	}
+	return changed;
+}
+
 static bool DrawOptions()
 {
 	bool changed = false;
@@ -562,12 +583,12 @@ static bool DrawOptions()
 				restyle |= ImGui::ColorEdit3("##primary", g_Appearance.primary, ImGuiColorEditFlags_NoInputs);
 			}
 			ImGui::SetNextItemWidth(160);
-			restyle |= ImGui::SliderFloat("Opacity", &g_Appearance.opacity, 0.3f, 1.0f, "%.2f");
+			restyle |= Slider("Opacity", &g_Appearance.opacity, 0.3f, 1.0f, "%.2f", Appearance().opacity);
 			ImGui::SetNextItemWidth(160);
 			if (!ImGui::IsAnyItemActive() || scale == 0)
 				scale = g_Appearance.scale;
-			ImGui::SliderFloat("Text size", &scale, 0.75f, 2.0f, "%.2f");
-			if (ImGui::IsItemDeactivatedAfterEdit())
+			bool reset_scale = Slider("Text size", &scale, 0.75f, 2.0f, "%.2f", Appearance().scale) && !ImGui::IsItemActive();
+			if (ImGui::IsItemDeactivatedAfterEdit() || reset_scale)
 			{
 				g_Appearance.scale = scale;
 				restyle = true;
@@ -591,16 +612,16 @@ static bool DrawOptions()
 			{
 				ImGui::PushID(kind);
 				ImGui::SetNextItemWidth(110);
-				changed |= ImGui::SliderFloat("##width", &g_Outlines[kind].width, 1, 12, "thick %.1f");
+				changed |= Slider("##width", &g_Outlines[kind].width, 1, 12, "thick %.1f", OUTLINE_DEFAULTS[kind].width);
 				ImGui::SameLine();
 				ImGui::SetNextItemWidth(110);
-				changed |= ImGui::SliderFloat("##grow", &g_Outlines[kind].grow, -12, 12, "size %.1f");
+				changed |= Slider("##grow", &g_Outlines[kind].grow, -12, 12, "size %.1f", OUTLINE_DEFAULTS[kind].grow);
 				ImGui::SameLine();
 				ImGui::SetNextItemWidth(80);
-				changed |= ImGui::SliderFloat("##x", &g_Outlines[kind].x, -12, 12, "x %.1f");
+				changed |= Slider("##x", &g_Outlines[kind].x, -12, 12, "x %.1f", OUTLINE_DEFAULTS[kind].x);
 				ImGui::SameLine();
 				ImGui::SetNextItemWidth(80);
-				changed |= ImGui::SliderFloat("##y", &g_Outlines[kind].y, -12, 12, "y %.1f");
+				changed |= Slider("##y", &g_Outlines[kind].y, -12, 12, "y %.1f", OUTLINE_DEFAULTS[kind].y);
 				ImGui::SameLine();
 				ImGui::TextUnformatted(OutlineName(kind));
 				ImGui::PopID();
@@ -624,10 +645,10 @@ static bool DrawOptions()
 				changed |= ImGui::Combo("##side", &g_Labels[kind].side, sides, SIDE_COUNT);
 				ImGui::SameLine();
 				ImGui::SetNextItemWidth(90);
-				changed |= ImGui::SliderFloat("##x", &g_Labels[kind].x, -60, 60, "x %.0f");
+				changed |= Slider("##x", &g_Labels[kind].x, -60, 60, "x %.0f", LABEL_DEFAULTS[kind].x);
 				ImGui::SameLine();
 				ImGui::SetNextItemWidth(90);
-				changed |= ImGui::SliderFloat("##y", &g_Labels[kind].y, -60, 60, "y %.0f");
+				changed |= Slider("##y", &g_Labels[kind].y, -60, 60, "y %.0f", LABEL_DEFAULTS[kind].y);
 				ImGui::SameLine();
 				ImGui::TextUnformatted(label_names[kind]);
 				ImGui::PopID();

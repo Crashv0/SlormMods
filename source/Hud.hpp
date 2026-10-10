@@ -122,7 +122,7 @@ extern bool g_Visible;
 extern bool g_Marks;
 
 // The shapes the outlines come in, each with its own look.
-enum OutlineKind { OUTLINE_LEGACY, OUTLINE_SOCKET, OUTLINE_PASSIVE, OUTLINE_UPGRADE, OUTLINE_SKILL, OUTLINE_BAR, OUTLINE_ATTRIBUTE, OUTLINE_REAPER, OUTLINE_RUNE, OUTLINE_GEAR, OUTLINE_PIP, OUTLINE_SPECIAL, OUTLINE_COUNT };
+enum OutlineKind { OUTLINE_LEGACY, OUTLINE_SOCKET, OUTLINE_PASSIVE, OUTLINE_UPGRADE, OUTLINE_SKILL, OUTLINE_BAR, OUTLINE_ATTRIBUTE, OUTLINE_REAPER, OUTLINE_RUNE, OUTLINE_GEAR, OUTLINE_PIP, OUTLINE_SPECIAL, OUTLINE_ULTIMATUM, OUTLINE_COUNT };
 struct OutlineStyle
 {
 	// Line thickness, and how far outside the icon's edge the line starts; both in screen units.
@@ -201,6 +201,9 @@ struct Live
 	std::vector<int> skill_slots;
 	// The equipped reaper, -1 when unknown. Primordial ones are numbered after the plain ones.
 	int reaper = -1;
+	// The equipped ultimatum and its level, -1 for none.
+	int ultimatum = -1;
+	int ultimatum_level = 0;
 	// By rune id: 1 when equipped, -1 when the game has not worked it out yet.
 	std::vector<int> runes;
 	// Equipped items by slot, in the game's order.
@@ -225,6 +228,8 @@ Mark AttributeMark(const Build& Build, int Id, int& Rank, int& Wanted);
 constexpr int REAPER_COUNT = 120;
 // The reaper the build has, numbered as the game numbers the equipped one.
 inline int BuildReaperNumber(const Build& Build) { return Build.reaper.id + (Build.reaper.primordial ? REAPER_COUNT : 0); }
+// An ultimatum: the build's and equipped at its level, equipped below it, not equipped, or equipped and not the build's.
+Mark UltimatumMark(const Build& Build, int Id);
 // A rune: in the build and equipped, in it and not, or equipped and not in it. None while the game has no answer.
 Mark RuneMark(const Build& Build, int Id);
 // A stat the build has on an item: Match in the same tier at the build's roll, Todo when it is not on the item,

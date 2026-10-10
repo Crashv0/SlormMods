@@ -20,9 +20,10 @@ Appearance g_Appearance;
 bool g_SuppressToggle = false;
 bool g_Visible = true;
 bool g_Marks = true;
+// Sizes and shifts are as on a 2560-wide screen and scale with the game's UI from there.
 // For the tooltip's pips the thickness is the pip's size.
-const OutlineStyle OUTLINE_DEFAULTS[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 }, { 11.1f, -8.5f }, { 5.8f, 3.8f }, { 4, 0 }, { 3, 0 }, { 2.7f, 5.1f, 0, 4.1f }, { 12, 0 }, { 3, 0 } };
-OutlineStyle g_Outlines[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 }, { 11.1f, -8.5f }, { 5.8f, 3.8f }, { 4, 0 }, { 3, 0 }, { 2.7f, 5.1f, 0, 4.1f }, { 12, 0 }, { 3, 0 } };
+const OutlineStyle OUTLINE_DEFAULTS[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 }, { 11.1f, -8.5f }, { 5.8f, 3.8f }, { 4, 0 }, { 3, 0 }, { 2.7f, 5.1f, 0, 4.1f }, { 12, 0 }, { 3, 0 }, { 4, 4.1f, 5.2f, 4.9f } };
+OutlineStyle g_Outlines[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 }, { 11.1f, -8.5f }, { 5.8f, 3.8f }, { 4, 0 }, { 3, 0 }, { 2.7f, 5.1f, 0, 4.1f }, { 12, 0 }, { 3, 0 }, { 4, 4.1f, 5.2f, 4.9f } };
 
 const LabelStyle LABEL_DEFAULTS[LABEL_COUNT] = { { SIDE_BOTTOM, 0, 0 }, { SIDE_BOTTOM, 0, -8 }, { SIDE_LEFT, -6, 0 } };
 LabelStyle g_Labels[LABEL_COUNT] = { { SIDE_BOTTOM, 0, 0 }, { SIDE_BOTTOM, 0, -8 }, { SIDE_LEFT, -6, 0 } };
@@ -33,7 +34,7 @@ float g_MarkColors[MARK_COUNT][3] = { { 1, 1, 1 }, { 0.35f, 0.82f, 0.35f }, { 0.
 
 const char* OutlineName(int Kind)
 {
-	static const char* names[] = { "Legacies", "Stone sockets", "Round upgrades", "Square upgrades", "Skills", "Skill bar pickers", "Attributes", "Reapers", "Runes", "Gear slots", "Tooltip pips", "Tooltip special stats" };
+	static const char* names[] = { "Legacies", "Stone sockets", "Round upgrades", "Square upgrades", "Skills", "Skill bar pickers", "Attributes", "Reapers", "Runes", "Gear slots", "Tooltip pips", "Tooltip special stats", "Ultimatums" };
 	return Kind >= 0 && Kind < OUTLINE_COUNT ? names[Kind] : "";
 }
 
@@ -260,6 +261,20 @@ static void ReadLive(CInstance* Self)
 		Log("gear slots in order: %s", order.c_str());
 	}
 #endif
+	// Each ultimatum is [unlocked, level, equipped by the knight, by the huntress, by the mage].
+	RValue ultimatums = global("ultimatums");
+	if (ultimatums.IsArray() && live.hero >= 0 && live.hero < 3)
+	{
+		std::vector<RValue> list = ultimatums.ToVector();
+		for (int id = 0; id < static_cast<int>(list.size()); id++)
+		{
+			std::vector<RValue> fields = list[id].IsArray() ? list[id].ToVector() : std::vector<RValue>();
+			if (fields.size() < 5 || ToNumber(fields[2 + live.hero]) == 0)
+				continue;
+			live.ultimatum = id;
+			live.ultimatum_level = static_cast<int>(ToNumber(fields[1]));
+		}
+	}
 	RValue reapers = global("current_weapon"), runes = global("fast_check_rune_equipped");
 	if (reapers.IsArray())
 	{
@@ -438,6 +453,18 @@ Mark GearMark(const BuildItem& Item)
 	return found == wanted ? Mark::Match : started ? Mark::Partial : Mark::Todo;
 }
 
+Mark UltimatumMark(const Build& Build, int Id)
+{
+	if (Build.ultimatum < 0)
+		return Mark::None;
+	bool equipped = Id == g_Live.ultimatum;
+	if (Id != Build.ultimatum)
+		return equipped ? Mark::Wrong : Mark::None;
+	if (!equipped)
+		return Mark::Todo;
+	return g_Live.ultimatum_level >= Build.ultimatum_level ? Mark::Match : Mark::Partial;
+}
+
 Mark RuneMark(const Build& Build, int Id)
 {
 	if (Id < 0 || Id >= static_cast<int>(g_Live.runes.size()) || g_Live.runes[Id] < 0)
@@ -487,6 +514,9 @@ static double MarkColor(Mark Kind)
 	return static_cast<double>(byte(color[0]) | (byte(color[1]) << 8) | (byte(color[2]) << 16));
 }
 
+// The game's UI scale against a 2560-wide screen's, which the outline and text settings are given for.
+static double g_Unit = 1;
+
 // Set while the inventory screen shows an item's or a reaper's tooltip.
 static bool g_OnlyHovered = false;
 static double g_MouseX = 0, g_MouseY = 0;
@@ -498,12 +528,12 @@ static void Outline(double Left, double Top, double Right, double Bottom, Mark K
 	// With a tooltip up, only what the mouse is on keeps its outline; the tooltip would sit under the rest.
 	if (g_OnlyHovered && (g_MouseX < Left || g_MouseX > Right || g_MouseY < Top || g_MouseY > Bottom))
 		return;
-	double width = std::clamp(static_cast<double>(style.width), 1.0, 20.0), grow = style.grow;
-	Left += style.x;
-	Right += style.x;
-	Top += style.y;
-	Bottom += style.y;
-	if (Shape == OUTLINE_UPGRADE || Shape == OUTLINE_SKILL || Shape == OUTLINE_BAR || Shape == OUTLINE_REAPER || Shape == OUTLINE_GEAR)
+	double width = std::clamp(static_cast<double>(style.width), 1.0, 20.0) * g_Unit, grow = style.grow * g_Unit;
+	Left += style.x * g_Unit;
+	Right += style.x * g_Unit;
+	Top += style.y * g_Unit;
+	Bottom += style.y * g_Unit;
+	if (Shape == OUTLINE_UPGRADE || Shape == OUTLINE_SKILL || Shape == OUTLINE_BAR || Shape == OUTLINE_REAPER || Shape == OUTLINE_GEAR || Shape == OUTLINE_ULTIMATUM)
 	{
 		g_Yytk->CallBuiltin("draw_set_color", { RValue(MarkColor(Kind)) });
 		double l = Left - grow, t = Top - grow, r = Right + grow, b = Bottom + grow;
@@ -542,7 +572,7 @@ static void Outline(double Left, double Top, double Right, double Bottom, Mark K
 static void Label(double Left, double Top, double Right, double Bottom, const std::string& Text, Mark Kind, LabelKind Where, OutlineKind Shape)
 {
 	const LabelStyle& style = g_Labels[Where];
-	double reach = g_Outlines[Shape].width + (std::max)(0.0f, g_Outlines[Shape].grow) + 4;
+	double reach = (g_Outlines[Shape].width + (std::max)(0.0f, g_Outlines[Shape].grow) + 4) * g_Unit;
 	double X = (Left + Right) / 2, Y = (Top + Bottom) / 2;
 	// GameMaker aligns 0 from the left or top, 1 centred, 2 from the right or bottom.
 	double across = 1, down = 1;
@@ -553,8 +583,8 @@ static void Label(double Left, double Top, double Right, double Bottom, const st
 	case SIDE_RIGHT: X = Right + reach; across = 0; break;
 	default: Y = Bottom + reach; down = 0; break;
 	}
-	X += style.x;
-	Y += style.y;
+	X += style.x * g_Unit;
+	Y += style.y * g_Unit;
 	g_Yytk->CallBuiltin("draw_set_halign", { RValue(across) });
 	g_Yytk->CallBuiltin("draw_set_valign", { RValue(down) });
 	static const int edge[][2] = { { -2, 0 }, { 2, 0 }, { 0, -2 }, { 0, 2 }, { -1, -1 }, { 1, -1 }, { -1, 1 }, { 1, 1 } };
@@ -697,6 +727,32 @@ static void MarkSkills(CInstance* Self, const Build& Build)
 	}
 }
 
+// The inventory screen's fixed layouts are measured from its page tabs, which the game does list:
+// three down the middle, named inv_0 to inv_2, the top one at 616,136 on a 1920-wide screen.
+// Shift comes back as how far the screen sits from there, so the layouts hold where the panel is placed differently.
+static void InventoryShift(CInstance* Self, double Scale, double& X, double& Y)
+{
+	X = Y = 0;
+	RValue slots = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("mbas") });
+	if (!slots.IsArray())
+		return;
+	for (const RValue& entry : slots.ToVector())
+	{
+		if (!entry.IsArray())
+			continue;
+		// [left, right, top, bottom, name, kind, ...]
+		std::vector<RValue> fields = entry.ToVector();
+		if (fields.size() < 6 || !fields[4].IsString() || !fields[5].IsString() || fields[5].ToString() != "panel_switcher")
+			continue;
+		std::string name = fields[4].ToString();
+		if (name.size() != 5 || name.compare(0, 4, "inv_") != 0 || name[4] < '0' || name[4] > '2')
+			continue;
+		X = ToNumber(fields[0]) - 616 * Scale;
+		Y = ToNumber(fields[2]) - (136 + 272 * (name[4] - '0')) * Scale;
+		return;
+	}
+}
+
 // The attributes on the inventory screen: an outline on each icon, and a tick on its bar where the build stops.
 // The game lists the panel's areas only while there is a point to spend, so the layout is kept from a
 // 1920-wide screen and corrected by the areas whenever they are there.
@@ -710,14 +766,11 @@ static void MarkAttributes(CInstance* Self, const Build& Build)
 	if (scale <= 0)
 		scale = 1;
 	struct Row { double x, y, size, bar_left, bar_top, bar_height; };
-	static Row rows[ATTRIBUTE_COUNT];
-	static double rows_scale = 0;
-	if (rows_scale != scale)
-	{
-		rows_scale = scale;
-		for (int id = 0; id < ATTRIBUTE_COUNT; id++)
-			rows[id] = { (id % 2 ? 774 : 790) * scale, (359 + 60 * id) * scale, 36 * scale, 838 * scale, (367 + 60 * id) * scale, 20 * scale };
-	}
+	double shift_x = 0, shift_y = 0;
+	InventoryShift(Self, scale, shift_x, shift_y);
+	Row rows[ATTRIBUTE_COUNT];
+	for (int id = 0; id < ATTRIBUTE_COUNT; id++)
+		rows[id] = { shift_x + (id % 2 ? 774 : 790) * scale, shift_y + (359 + 60 * id) * scale, 36 * scale, shift_x + 838 * scale, shift_y + (367 + 60 * id) * scale, 20 * scale };
 
 	RValue areas = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("mba") });
 	if (areas.IsArray())
@@ -781,6 +834,8 @@ static void MarkGear(CInstance* Self, const Build& Build)
 	double scale = ToNumber(g_Yytk->CallBuiltin("variable_global_get", { RValue("ui_scale") }));
 	if (scale <= 0)
 		scale = 1;
+	double shift_x = 0, shift_y = 0;
+	InventoryShift(Self, scale, shift_x, shift_y);
 	static const double corners[GEAR_SLOTS][2] = {
 		{ 884, 188 }, { 1112, 260 }, { 756, 260 }, { 756, 340 }, { 756, 420 }, { 934, 540 },
 		{ 848, 508 }, { 1020, 508 }, { 984, 188 }, { 1112, 420 }, { 1112, 340 },
@@ -790,7 +845,7 @@ static void MarkGear(CInstance* Self, const Build& Build)
 		int index = GearIndex(item);
 		if (index < 0 || index >= GEAR_SLOTS)
 			continue;
-		double x = corners[index][0] * scale, y = corners[index][1] * scale;
+		double x = shift_x + corners[index][0] * scale, y = shift_y + corners[index][1] * scale;
 		Outline(x, y, x + GEAR_SLOT_SIZE * scale, y + GEAR_SLOT_SIZE * scale, GearMark(item), OUTLINE_GEAR);
 	}
 }
@@ -803,9 +858,9 @@ static std::string Show(const RValue& Value, int Depth, size_t Limit);
 static void Pip(double X, double Y, Mark Kind)
 {
 	const OutlineStyle& style = g_Outlines[OUTLINE_PIP];
-	double half = std::clamp(static_cast<double>(style.width), 2.0, 40.0) / 2;
-	X += style.x;
-	Y += style.y;
+	double half = std::clamp(static_cast<double>(style.width), 2.0, 40.0) / 2 * g_Unit;
+	X += style.x * g_Unit;
+	Y += style.y * g_Unit;
 	g_Yytk->CallBuiltin("draw_set_color", { RValue(0.0) });
 	g_Yytk->CallBuiltin("draw_rectangle", { RValue(X - half - 2), RValue(Y - half - 2), RValue(X + half + 1), RValue(Y + half + 1), RValue(false) });
 	g_Yytk->CallBuiltin("draw_set_color", { RValue(MarkColor(Kind)) });
@@ -969,7 +1024,9 @@ static void MarkReaper(CInstance* Self, const Build& Build)
 	if (on_list && !listed && order >= 0 && order / 24 == page)
 	{
 		int cell = order % 24;
-		double x = (880 + 136 * (cell % 6)) * scale, y = (344 + 136 * (cell / 6)) * scale;
+		double shift_x = 0, shift_y = 0;
+		InventoryShift(Self, scale, shift_x, shift_y);
+		double x = shift_x + (880 + 136 * (cell % 6)) * scale, y = shift_y + (344 + 136 * (cell / 6)) * scale;
 		Outline(x, y, x + 112 * scale, y + 112 * scale, Mark::Todo, OUTLINE_REAPER);
 	}
 	if (areas.IsArray())
@@ -982,10 +1039,18 @@ static void MarkReaper(CInstance* Self, const Build& Build)
 			if (fields.size() < 9 || !fields[0].IsString())
 				continue;
 			std::string kind = fields[0].ToString();
+			double x = ToNumber(fields[2]), y = ToNumber(fields[3]);
+			// The mage's list of ultimatums, and the equipped one's slot on the gear page.
+			if (kind == "Ultimatum Equip" || kind == "Ultimatum Open")
+			{
+				Mark mark = UltimatumMark(Build, kind == "Ultimatum Open" ? g_Live.ultimatum : static_cast<int>(ToNumber(fields[8])));
+				if (mark != Mark::None)
+					Outline(x, y, x + ToNumber(fields[4]), y + ToNumber(fields[5]), mark, OUTLINE_ULTIMATUM);
+				continue;
+			}
 			if (kind != "Equip Rune" && kind != "Open Rune")
 				continue;
 			Mark mark = RuneMark(Build, static_cast<int>(ToNumber(fields[8])));
-			double x = ToNumber(fields[2]), y = ToNumber(fields[3]);
 			if (mark != Mark::None)
 				Outline(x, y, x + ToNumber(fields[4]), y + ToNumber(fields[5]), mark, OUTLINE_RUNE);
 		}
@@ -1071,15 +1136,28 @@ static void DrawMarks(CInstance* Self)
 	bool bar = menu.ToString() == "none";
 	if (!bar && position.ToString() != "open")
 		return;
+	// A menu slides in and out; nothing is where it will be until it rests.
+	auto offset = [&](const char* Name) { return std::abs(ToNumber(g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue(Name) }))); };
+	if (!bar && (offset("menu_x_pos") > 0.5 || offset("menu_y_pos") > 0.5))
+		return;
+	double ui_scale = ToNumber(g_Yytk->CallBuiltin("variable_global_get", { RValue("ui_scale") }));
+	g_Unit = ui_scale > 0 ? ui_scale * 0.75 : 1;
 	RValue old_color = g_Yytk->CallBuiltin("draw_get_color", {}), old_alpha = g_Yytk->CallBuiltin("draw_get_alpha", {});
 	RValue old_halign = g_Yytk->CallBuiltin("draw_get_halign", {}), old_valign = g_Yytk->CallBuiltin("draw_get_valign", {});
 	g_Yytk->CallBuiltin("draw_set_alpha", { RValue(1.0) });
 	if (bar)
 		MarkBar(Self, build);
-	else if (menu.ToString() == "elements")
-		MarkLegacies(Self, build);
-	else if (menu.ToString() == "skills")
-		MarkSkills(Self, build);
+	else if (menu.ToString() == "elements" || menu.ToString() == "skills")
+	{
+		if (menu.ToString() == "elements") MarkLegacies(Self, build);
+		else MarkSkills(Self, build);
+		// The game keeps the hover tooltip on a screen-sized surface it has already drawn; drawing it
+		// again puts it back over the outlines.
+		RValue shown = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("show_tooltip") });
+		RValue tip = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("tooltip_surf") });
+		if (ToNumber(shown) != 0 && ToNumber(g_Yytk->CallBuiltin("surface_exists", { tip })) != 0)
+			g_Yytk->CallBuiltin("draw_surface", { tip, RValue(0.0), RValue(0.0) });
+	}
 	else if (menu.ToString() == "inventory")
 	{
 		RValue shown = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("show_tooltip") });
@@ -1108,7 +1186,7 @@ static int g_DumpCount = 0;
 // Names that get printed in full: the ancestral legacy screen and what it reads.
 static bool Interesting(const std::string& Name)
 {
-	static const char* words[] = { "ele", "ancest", "gem", "realm", "stone", "legac", "aura", "hero", "class", "menu", "tree", "skill", "trait", "mba", "door", "coord", "equip", "temp", "attrib", "stat", "act_", "panel", "activ", "tooltip" };
+	static const char* words[] = { "ele", "ancest", "gem", "realm", "stone", "legac", "aura", "hero", "class", "menu", "tree", "skill", "trait", "mba", "door", "coord", "equip", "temp", "attrib", "stat", "act_", "panel", "activ", "tooltip", "ultim" };
 	std::string name = Lower(Name);
 	if (name == "mb")
 		return true;
@@ -1185,6 +1263,10 @@ static void Dump(CInstance* Self)
 	file << "--- gui " << Show(width, 0, 0) << " x " << Show(height, 0, 0) << " ---\n";
 	file << "mouse_gui = " << Show(g_Yytk->CallBuiltin("device_mouse_x_to_gui", { RValue(0.0) }), 0, 0) << ", "
 		<< Show(g_Yytk->CallBuiltin("device_mouse_y_to_gui", { RValue(0.0) }), 0, 0) << '\n';
+	RValue tip = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("tooltip_surf") });
+	if (ToNumber(g_Yytk->CallBuiltin("surface_exists", { tip })) != 0)
+		file << "tooltip_surf_size = " << Show(g_Yytk->CallBuiltin("surface_get_width", { tip }), 0, 0) << ", "
+			<< Show(g_Yytk->CallBuiltin("surface_get_height", { tip }), 0, 0) << '\n';
 	RValue surface = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("tree_surf") });
 	if (ToNumber(g_Yytk->CallBuiltin("surface_exists", { surface })) != 0)
 		file << "tree_surf_size = " << Show(g_Yytk->CallBuiltin("surface_get_width", { surface }), 0, 0) << ", "
