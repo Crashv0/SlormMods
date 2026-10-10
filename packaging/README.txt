@@ -1,5 +1,5 @@
 SlormSuite
-A collection of tweaks for The Slormancer.
+A collection of mods for The Slormancer.
 
 REQUIREMENTS
   The Slormancer on Steam (Windows, 64-bit)
@@ -17,8 +17,8 @@ INSTALL
 
 USE
   Press F7 to show or hide the SlormSuite window; the key can be changed
-  on the Options tab. Each tweak is turned on and set up on the Tweaks
-  tab. All of them start off.
+  on the Options tab. Each mod is turned on and set up on the Mods
+  tab, or on a tab of its own. All of them start off.
 
 UNINSTALL
   Delete these from the game folder:
@@ -36,4 +36,5 @@ FILES IN THIS ZIP
   mods\licenses\                   licenses and sources of the above
 
 Created while playing: aurie.log, and in mods\Aurie the files
-SlormSuite.txt (your settings) and SlormSuite.layout.ini.
+SlormSuite.txt (your settings), SlormSuite.layout.ini and the folder
+SlormSuite.forge (Great Forge lists you saved).
