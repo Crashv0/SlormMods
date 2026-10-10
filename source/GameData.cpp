@@ -17,7 +17,7 @@ struct SkillInfo
 };
 static std::map<int, SkillInfo> g_Skills[3];
 static std::map<int, std::string> g_Smiths, g_Traits, g_Ultimatums, g_Weapons;
-static std::map<int, int> g_LegacyRealms;
+static std::map<int, int> g_LegacyRealms, g_ReaperOrders;
 static std::map<int, std::string> g_Legacies, g_Reapers, g_Runes, g_Activables, g_Legendaries;
 
 using Row = std::map<std::string, std::string>;
@@ -221,6 +221,8 @@ void LoadGameData()
 	for (Row& row : LoadTable(game / "dat_ele.json"))
 		if (ToInt(row["REF"]) >= 0) g_LegacyRealms[ToInt(row["REF"])] = ToInt(row["REALM"]);
 	LoadNames(game / "dat_rea.json", "EN_NAME", g_Reapers);
+	for (Row& row : LoadTable(game / "dat_rea.json"))
+		if (ToInt(row["REF"]) >= 0) g_ReaperOrders[ToInt(row["REF"])] = ToInt(row["ORDER"]);
 	LoadNames(game / "dat_run.json", "EN_NAME", g_Runes);
 	LoadNames(game / "dat_act.json", "EN_NAME", g_Activables);
 	LoadNames(game / "dat_leg.json", "EN_NAME", g_Legendaries);
@@ -310,6 +312,12 @@ std::string AttributeName(int Id) { return NameIn(g_Traits, Id, "attribute"); }
 std::string SmithName(int Id) { return NameIn(g_Smiths, Id, "smith"); }
 std::string LegendaryName(int Id) { return NameIn(g_Legendaries, Id, "legendary"); }
 std::string UltimatumName(int Id) { return NameIn(g_Ultimatums, Id, "ultimatum"); }
+
+int ReaperOrder(int Id)
+{
+	auto found = g_ReaperOrders.find(Id);
+	return found != g_ReaperOrders.end() ? found->second : -1;
+}
 
 // Reaper names hold a $ where the class's weapon goes: "Adam Nostrus' $".
 std::string ReaperName(int Id, int Hero, bool Primordial)

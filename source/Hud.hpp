@@ -237,6 +237,8 @@ std::string LegacyName(int Id);
 // The tile of the ancestral legacy map a legacy sits on, -1 when unknown.
 int LegacyRealm(int Id);
 std::string ReaperName(int Id, int Hero, bool Primordial);
+// Where the reaper sits in the game's list, counted from zero; -1 when unknown.
+int ReaperOrder(int Id);
 std::string RuneName(int Id);
 std::string ActivableName(int Id);
 std::string AttributeName(int Id);

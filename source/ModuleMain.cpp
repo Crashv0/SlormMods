@@ -584,6 +584,8 @@ static void MarkReaper(CInstance* Self, const Build& Build)
 	if (scale <= 0)
 		scale = 1;
 	RValue slots = get("mbas"), areas = get("mba");
+	// An owned reaper is listed as an area; the build's may not be.
+	bool listed = false;
 	if (slots.IsArray())
 		for (const RValue& entry : slots.ToVector())
 		{
@@ -597,15 +599,26 @@ static void MarkReaper(CInstance* Self, const Build& Build)
 			if (kind != "weapon_select" && kind != "weapon_switcher")
 				continue;
 			int id = static_cast<int>(ToNumber(fields[4]));
-			bool held = id == g_Live.reaper;
 			// The list shows a reaper once, plain or primordial.
 			bool build = id == wanted || (kind == "weapon_select" && id % REAPER_COUNT == Build.reaper.id);
-			Mark mark = build ? (g_Live.reaper == wanted ? Mark::Match : Mark::Todo) : held ? Mark::Wrong : Mark::None;
-			// The gear page's reaper slot is drawn a little above the area that takes its clicks.
+			if (build && kind == "weapon_select") listed = true;
+			Mark mark = build ? (g_Live.reaper == wanted ? Mark::Match : Mark::Todo) : id == g_Live.reaper ? Mark::Wrong : Mark::None;
+			if (mark == Mark::None)
+				continue;
+			// The gear page's slot is drawn a little above the area that takes its clicks.
 			double lift = kind == "weapon_switcher" ? 8 * scale : 0;
-			if (mark != Mark::None)
-				Outline(ToNumber(fields[0]), ToNumber(fields[2]) - lift, ToNumber(fields[1]), ToNumber(fields[3]) - lift, mark, OUTLINE_REAPER);
+			Outline(ToNumber(fields[0]), ToNumber(fields[2]) - lift, ToNumber(fields[1]), ToNumber(fields[3]) - lift, mark, OUTLINE_REAPER);
 		}
+	// The reaper page lays every reaper out in a fixed grid, six across and four down, owned or not.
+	// One not owned yet is blacked out, drawn smaller, and not listed, so it is placed from the grid.
+	int order = ReaperOrder(Build.reaper.id), page = static_cast<int>(ToNumber(get("weapon_page"))) - 1;
+	bool on_list = static_cast<int>(ToNumber(get("inventory_panel"))) == 1;
+	if (on_list && !listed && order >= 0 && order / 24 == page)
+	{
+		int cell = order % 24;
+		double x = (880 + 136 * (cell % 6)) * scale, y = (344 + 136 * (cell / 6)) * scale;
+		Outline(x, y, x + 112 * scale, y + 112 * scale, Mark::Todo, OUTLINE_REAPER);
+	}
 	if (areas.IsArray())
 		for (const RValue& entry : areas.ToVector())
 		{
