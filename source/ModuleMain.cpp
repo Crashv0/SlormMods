@@ -20,10 +20,26 @@ Appearance g_Appearance;
 bool g_SuppressToggle = false;
 bool g_Visible = true;
 bool g_Marks = true;
+const OutlineStyle OUTLINE_DEFAULTS[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 } };
+OutlineStyle g_Outlines[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 } };
+
+const LabelStyle LABEL_DEFAULTS[LABEL_COUNT] = { { SIDE_BOTTOM, 0, 0 }, { SIDE_BOTTOM, 0, -8 } };
+LabelStyle g_Labels[LABEL_COUNT] = { { SIDE_BOTTOM, 0, 0 }, { SIDE_BOTTOM, 0, -8 } };
+
+// None, match, partial, wrong, still to place.
+const float MARK_DEFAULTS[MARK_COUNT][3] = { { 1, 1, 1 }, { 0.35f, 0.82f, 0.35f }, { 0.96f, 0.59f, 0.16f }, { 0.94f, 0.24f, 0.24f }, { 0.87f, 0.21f, 0.87f } };
+float g_MarkColors[MARK_COUNT][3] = { { 1, 1, 1 }, { 0.35f, 0.82f, 0.35f }, { 0.96f, 0.59f, 0.16f }, { 0.94f, 0.24f, 0.24f }, { 0.87f, 0.21f, 0.87f } };
+
+const char* OutlineName(int Kind)
+{
+	static const char* names[] = { "Legacies", "Stone sockets", "Round upgrades", "Square upgrades", "Skills" };
+	return Kind >= 0 && Kind < OUTLINE_COUNT ? names[Kind] : "";
+}
 
 Live g_Live;
 
 static bool g_KeyWasDown = false;
+static bool g_MarksKeyWasDown = false;
 
 template <typename... Args>
 static void Log(const char* Format, Args... Arguments)
@@ -37,6 +53,9 @@ static void LoadConfig()
 	g_ActiveBuild = -1;
 	g_Visible = true;
 	g_Marks = true;
+	std::copy(std::begin(OUTLINE_DEFAULTS), std::end(OUTLINE_DEFAULTS), std::begin(g_Outlines));
+	memcpy(g_MarkColors, MARK_DEFAULTS, sizeof(g_MarkColors));
+	std::copy(std::begin(LABEL_DEFAULTS), std::end(LABEL_DEFAULTS), std::begin(g_Labels));
 	g_Appearance = Appearance();
 
 	std::ifstream file(g_ConfigPath);
@@ -66,13 +85,41 @@ static void LoadConfig()
 		}
 		if (first == "active_build") { words >> g_ActiveBuild; continue; }
 		if (first == "visible") { int flag = 1; words >> flag; g_Visible = flag != 0; continue; }
+		if (first == "outline")
+		{
+			// outline KIND WIDTH GROW
+			int kind = -1;
+			OutlineStyle style;
+			if (words >> kind >> style.width >> style.grow && kind >= 0 && kind < OUTLINE_COUNT)
+				g_Outlines[kind] = style;
+			continue;
+		}
+		if (first == "label")
+		{
+			// label KIND SIDE X Y
+			int kind = -1;
+			LabelStyle style;
+			if (words >> kind >> style.side >> style.x >> style.y && kind >= 0 && kind < LABEL_COUNT && style.side >= 0 && style.side < SIDE_COUNT)
+				g_Labels[kind] = style;
+			continue;
+		}
+		if (first == "mark_color")
+		{
+			// mark_color KIND RED GREEN BLUE
+			int kind = -1;
+			float color[3] = {};
+			if (words >> kind >> color[0] >> color[1] >> color[2] && kind > 0 && kind < MARK_COUNT)
+				std::copy(color, color + 3, g_MarkColors[kind]);
+			continue;
+		}
 		if (first == "marks") { int flag = 1; words >> flag; g_Marks = flag != 0; continue; }
 		if (first == "theme") { words >> g_Appearance.theme; continue; }
 		if (first == "accent") { int on = 0; words >> on >> g_Appearance.accent[0] >> g_Appearance.accent[1] >> g_Appearance.accent[2]; g_Appearance.custom_accent = on != 0; continue; }
 		if (first == "primary") { int on = 0; words >> on >> g_Appearance.primary[0] >> g_Appearance.primary[1] >> g_Appearance.primary[2]; g_Appearance.custom_primary = on != 0; continue; }
 		if (first == "opacity") { words >> g_Appearance.opacity; continue; }
 		if (first == "scale") { words >> g_Appearance.scale; continue; }
-		if (first == "hotkey") { words >> g_Appearance.hotkey; if (g_Appearance.hotkey < 8 || g_Appearance.hotkey > 254) g_Appearance.hotkey = VK_F7; continue; }
+		if (first == "hotkey") { words >> g_Appearance.hotkey; if (g_Appearance.hotkey < 8 || g_Appearance.hotkey > 254) g_Appearance.hotkey = VK_F3; continue; }
+		if (first == "marks_hotkey") { words >> g_Appearance.marks_hotkey; if (g_Appearance.marks_hotkey < 8 || g_Appearance.marks_hotkey > 254) g_Appearance.marks_hotkey = VK_F4; continue; }
 	}
 	if (g_ActiveBuild >= static_cast<int>(g_Builds.size()))
 		g_ActiveBuild = g_Builds.empty() ? -1 : 0;
@@ -84,6 +131,12 @@ void SaveConfig()
 	file << "# Written by the overlay. One build per line: build KEY NAME\n";
 	for (const Build& build : g_Builds)
 		file << "build " << build.key << ' ' << build.name << '\n';
+	for (int kind = 0; kind < OUTLINE_COUNT; kind++)
+		file << "outline " << kind << ' ' << g_Outlines[kind].width << ' ' << g_Outlines[kind].grow << '\n';
+	for (int kind = 1; kind < MARK_COUNT; kind++)
+		file << "mark_color " << kind << ' ' << g_MarkColors[kind][0] << ' ' << g_MarkColors[kind][1] << ' ' << g_MarkColors[kind][2] << '\n';
+	for (int kind = 0; kind < LABEL_COUNT; kind++)
+		file << "label " << kind << ' ' << g_Labels[kind].side << ' ' << g_Labels[kind].x << ' ' << g_Labels[kind].y << '\n';
 	file << "active_build " << g_ActiveBuild << '\n'
 		<< "visible " << (g_Visible ? 1 : 0) << '\n'
 		<< "marks " << (g_Marks ? 1 : 0) << '\n'
@@ -92,7 +145,8 @@ void SaveConfig()
 		<< "primary " << (g_Appearance.custom_primary ? 1 : 0) << ' ' << g_Appearance.primary[0] << ' ' << g_Appearance.primary[1] << ' ' << g_Appearance.primary[2] << '\n'
 		<< "opacity " << g_Appearance.opacity << '\n'
 		<< "scale " << g_Appearance.scale << '\n'
-		<< "hotkey " << g_Appearance.hotkey << '\n';
+		<< "hotkey " << g_Appearance.hotkey << '\n'
+		<< "marks_hotkey " << g_Appearance.marks_hotkey << '\n';
 }
 
 static double ToNumber(const RValue& Value)
@@ -128,7 +182,7 @@ static void ReadLive(CInstance* Self)
 	live.hero = static_cast<int>(ToNumber(global("current_hero")));
 	RValue menu = local("menu_show");
 	if (menu.IsString()) live.menu = menu.ToString();
-	// While the legacy screen is open the UI works on its own copies, so Undo can drop them.
+	// While a screen is open the UI works on its own copies, so Undo can drop them.
 	if (live.menu == "elements")
 	{
 		live.legacy_ranks = HeroRow(local("temp_elems"), live.hero);
@@ -141,6 +195,16 @@ static void ReadLive(CInstance* Self)
 		live.stones = HeroRow(global("elements_equipped"), live.hero);
 		live.realms = HeroRow(global("elements_realms"), live.hero);
 	}
+	if (live.menu == "skills")
+	{
+		live.skill_ranks = HeroRow(local("temp_skills"), live.hero);
+		live.skill_slots = HeroRow(local("temp_equipped"), live.hero);
+	}
+	if (live.skill_ranks.empty() || live.skill_slots.empty())
+	{
+		live.skill_ranks = HeroRow(global("skill_rank"), live.hero);
+		live.skill_slots = HeroRow(global("skill_equipped"), live.hero);
+	}
 	live.valid = !live.legacy_ranks.empty() && !live.stones.empty() && !live.realms.empty();
 	g_Live = std::move(live);
 }
@@ -150,21 +214,78 @@ static int At(const std::vector<int>& Values, int Index)
 	return Index >= 0 && Index < static_cast<int>(Values.size()) ? Values[Index] : 0;
 }
 
-// Todo is in the build and still to place; Wrong is placed and not in the build, or in it with no rank.
-enum class Mark { None, Match, Partial, Wrong, Todo };
-// GameMaker colours are blue, green, red from the high byte down: green, orange, red, blue.
-static const double MARK_COLORS[] = { 0, 0x5AD25A, 0x2896F5, 0x3C3CF0, 0xF59646 };
-
-// A ring around the middle of a box. Fill is how much of the box the ring spans.
-static void Outline(double Left, double Top, double Right, double Bottom, Mark Kind, double Fill)
+Mark UpgradeMark(const Build& Build, int Id, int& Rank, int& Wanted)
 {
-	g_Yytk->CallBuiltin("draw_set_color", { RValue(MARK_COLORS[static_cast<int>(Kind)]) });
+	Wanted = -1;
+	for (const BuildSkill& skill : Build.skills)
+		for (const Ranked& upgrade : skill.upgrades)
+			if (upgrade.id == Id) Wanted = upgrade.rank;
+	Rank = At(g_Live.skill_ranks, Id);
+	bool equipped = At(g_Live.skill_slots, Id) > 0;
+	if (Wanted < 0)
+	{
+		// One the build leaves out only matters on a skill the build uses.
+		int parent = UpgradeParent(Build.hero, Id);
+		bool used = parent >= 0 && (parent == Build.support || parent == Build.primary || parent == Build.secondary);
+		return equipped && used ? Mark::Wrong : Mark::None;
+	}
+	if (!equipped) return Mark::Todo;
+	return Rank == Wanted ? Mark::Match : Rank == 0 ? Mark::Wrong : Mark::Partial;
+}
+
+Mark SkillMark(const Build& Build, int Id)
+{
+	bool wanted = Id == Build.support || Id == Build.primary || Id == Build.secondary;
+	bool equipped = At(g_Live.skill_slots, Id) > 0;
+	if (!wanted)
+		return equipped ? Mark::Wrong : Mark::None;
+	if (!equipped)
+		return Mark::Todo;
+	int rank = 0, target = 0;
+	for (int id = 0; id < static_cast<int>(g_Live.skill_slots.size()); id++)
+	{
+		if (UpgradeParent(Build.hero, id) != Id)
+			continue;
+		Mark mark = UpgradeMark(Build, id, rank, target);
+		if (mark != Mark::None && mark != Mark::Match) return Mark::Partial;
+	}
+	return Mark::Match;
+}
+
+// GameMaker colours are blue, green, red from the high byte down.
+static double MarkColor(Mark Kind)
+{
+	const float* color = g_MarkColors[static_cast<int>(Kind)];
+	auto byte = [](float Part) { return static_cast<int>(std::clamp(Part, 0.0f, 1.0f) * 255.0f + 0.5f); };
+	return static_cast<double>(byte(color[0]) | (byte(color[1]) << 8) | (byte(color[2]) << 16));
+}
+
+// A ring around the middle of a box, or a frame around the box for the square kinds.
+static void Outline(double Left, double Top, double Right, double Bottom, Mark Kind, OutlineKind Shape)
+{
+	const OutlineStyle& style = g_Outlines[Shape];
+	double width = std::clamp(static_cast<double>(style.width), 1.0, 20.0), grow = style.grow;
+	if (Shape == OUTLINE_UPGRADE || Shape == OUTLINE_SKILL)
+	{
+		g_Yytk->CallBuiltin("draw_set_color", { RValue(MarkColor(Kind)) });
+		double l = Left - grow, t = Top - grow, r = Right + grow, b = Bottom + grow;
+		auto bar = [](double X1, double Y1, double X2, double Y2)
+		{
+			// A filled rectangle takes in its far corner, so stop one short.
+			g_Yytk->CallBuiltin("draw_rectangle", { RValue(X1), RValue(Y1), RValue(X2 - 1), RValue(Y2 - 1), RValue(false) });
+		};
+		bar(l - width, t - width, r + width, t);
+		bar(l - width, b, r + width, b + width);
+		bar(l - width, t, l, b);
+		bar(r, t, r + width, b);
+		return;
+	}
+	g_Yytk->CallBuiltin("draw_set_color", { RValue(MarkColor(Kind)) });
 	// The game's shapes land most of a pixel right and down of its sprites.
 	constexpr double nudge = 0.75;
-	double x = (Left + Right) / 2 - nudge, y = (Top + Bottom) / 2 - nudge, radius = (Right - Left) / 2 * Fill;
+	double x = (Left + Right) / 2 - nudge, y = (Top + Bottom) / 2 - nudge, radius = (std::max)(1.0, (Right - Left) / 2 + grow);
 	// Drawn as a strip of triangles: the game's own circle lands off the centre.
 	constexpr int steps = 40;
-	constexpr double width = 3;
 	g_Yytk->CallBuiltin("draw_primitive_begin", { RValue(5.0) });
 	for (int i = 0; i <= steps; i++)
 	{
@@ -175,14 +296,30 @@ static void Outline(double Left, double Top, double Right, double Bottom, Mark K
 	g_Yytk->CallBuiltin("draw_primitive_end", {});
 }
 
-// Text centred under a point, edged in black so it reads over the map.
-static void Label(double X, double Y, const std::string& Text, Mark Kind)
+// Text beside a box, edged in black so it reads over the game's art. It sits clear of the box's outline.
+static void Label(double Left, double Top, double Right, double Bottom, const std::string& Text, Mark Kind, LabelKind Where, OutlineKind Shape)
 {
+	const LabelStyle& style = g_Labels[Where];
+	double reach = g_Outlines[Shape].width + (std::max)(0.0f, g_Outlines[Shape].grow) + 4;
+	double X = (Left + Right) / 2, Y = (Top + Bottom) / 2;
+	// GameMaker aligns 0 from the left or top, 1 centred, 2 from the right or bottom.
+	double across = 1, down = 1;
+	switch (style.side)
+	{
+	case SIDE_TOP: Y = Top - reach; down = 2; break;
+	case SIDE_LEFT: X = Left - reach; across = 2; break;
+	case SIDE_RIGHT: X = Right + reach; across = 0; break;
+	default: Y = Bottom + reach; down = 0; break;
+	}
+	X += style.x;
+	Y += style.y;
+	g_Yytk->CallBuiltin("draw_set_halign", { RValue(across) });
+	g_Yytk->CallBuiltin("draw_set_valign", { RValue(down) });
 	static const int edge[][2] = { { -2, 0 }, { 2, 0 }, { 0, -2 }, { 0, 2 }, { -1, -1 }, { 1, -1 }, { -1, 1 }, { 1, 1 } };
 	g_Yytk->CallBuiltin("draw_set_color", { RValue(0.0) });
 	for (const auto& offset : edge)
 		g_Yytk->CallBuiltin("draw_text", { RValue(X + offset[0]), RValue(Y + offset[1]), RValue(Text.c_str()) });
-	g_Yytk->CallBuiltin("draw_set_color", { RValue(MARK_COLORS[static_cast<int>(Kind)]) });
+	g_Yytk->CallBuiltin("draw_set_color", { RValue(MarkColor(Kind)) });
 	g_Yytk->CallBuiltin("draw_text", { RValue(X), RValue(Y), RValue(Text.c_str()) });
 }
 
@@ -214,12 +351,6 @@ static void MarkLegacies(CInstance* Self, const Build& Build)
 	}
 	double shift_x = (seen_x - pan_x) * zoom, shift_y = (seen_y - pan_y) * zoom;
 
-	RValue old_color = g_Yytk->CallBuiltin("draw_get_color", {}), old_alpha = g_Yytk->CallBuiltin("draw_get_alpha", {});
-	RValue old_halign = g_Yytk->CallBuiltin("draw_get_halign", {}), old_valign = g_Yytk->CallBuiltin("draw_get_valign", {});
-	g_Yytk->CallBuiltin("draw_set_alpha", { RValue(1.0) });
-	// Centred, hanging from the top.
-	g_Yytk->CallBuiltin("draw_set_halign", { RValue(1.0) });
-	g_Yytk->CallBuiltin("draw_set_valign", { RValue(0.0) });
 	// Cut the outlines off at the panel's edge. The scissor is in window pixels, the panel in GUI units.
 	RValue old_scissor = g_Yytk->CallBuiltin("gpu_get_scissor", {});
 	double scale_x = ToNumber(g_Yytk->CallBuiltin("window_get_width", {})) / (std::max)(1.0, ToNumber(g_Yytk->CallBuiltin("display_get_gui_width", {})));
@@ -248,14 +379,14 @@ static void MarkLegacies(CInstance* Self, const Build& Build)
 		else if (active) mark = Mark::Wrong;
 		if (mark == Mark::None)
 			continue;
-		Outline(x, y, x + width, y + height, mark, 1.0);
+		Outline(x, y, x + width, y + height, mark, OUTLINE_LEGACY);
 		if (!wanted)
 			continue;
 		// Ranks put in against the build's: "2 < 10", or the rank alone once it matches.
 		std::string label = std::to_string(rank);
 		if (rank != wanted->rank)
 			label += (rank < wanted->rank ? " < " : " > ") + std::to_string(wanted->rank);
-		Label(x + width / 2, y + height + 6, label, mark);
+		Label(x, y, x + width, y + height, label, mark, LABEL_LEGACY, OUTLINE_LEGACY);
 	}
 
 	for (const RValue& entry : slot_list)
@@ -273,7 +404,7 @@ static void MarkLegacies(CInstance* Self, const Build& Build)
 		bool wanted = id == Build.first_node || std::find(Build.nodes.begin(), Build.nodes.end(), id) != Build.nodes.end();
 		bool placed = At(g_Live.stones, id) != 0;
 		if (wanted || placed)
-			Outline(x1, y1, x2, y2, !wanted ? Mark::Wrong : placed ? Mark::Match : Mark::Todo, 0.92);
+			Outline(x1, y1, x2, y2, !wanted ? Mark::Wrong : placed ? Mark::Match : Mark::Todo, OUTLINE_SOCKET);
 	}
 
 	if (old_scissor.IsStruct())
@@ -281,10 +412,47 @@ static void MarkLegacies(CInstance* Self, const Build& Build)
 		auto part = [&](const char* Name) { return g_Yytk->CallBuiltin("variable_struct_get", { old_scissor, RValue(Name) }); };
 		g_Yytk->CallBuiltin("gpu_set_scissor", { part("x"), part("y"), part("w"), part("h") });
 	}
-	g_Yytk->CallBuiltin("draw_set_halign", { old_halign });
-	g_Yytk->CallBuiltin("draw_set_valign", { old_valign });
-	g_Yytk->CallBuiltin("draw_set_color", { old_color });
-	g_Yytk->CallBuiltin("draw_set_alpha", { old_alpha });
+}
+
+// Outlines the skill screen: the row of skills, the specializations, and the grid of upgrades.
+static void MarkSkills(CInstance* Self, const Build& Build)
+{
+	RValue areas = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("mba") });
+	if (!areas.IsArray())
+		return;
+	for (const RValue& entry : areas.ToVector())
+	{
+		if (!entry.IsArray())
+			continue;
+		// [name, ?, x, y, width, height, ?, sprite, id]
+		std::vector<RValue> fields = entry.ToVector();
+		if (fields.size() < 9 || !fields[0].IsString())
+			continue;
+		std::string kind = fields[0].ToString();
+		int id = static_cast<int>(ToNumber(fields[8]));
+		double x = ToNumber(fields[2]), y = ToNumber(fields[3]), width = ToNumber(fields[4]), height = ToNumber(fields[5]);
+		if (kind == "Upgrade")
+		{
+			int rank = 0, wanted = 0;
+			Mark mark = UpgradeMark(Build, id, rank, wanted);
+			if (mark == Mark::None)
+				continue;
+			bool square = UpgradeIsSquare(Build.hero, id);
+			Outline(x, y, x + width, y + height, mark, square ? OUTLINE_UPGRADE : OUTLINE_PASSIVE);
+			// The game shows the rank itself; say what the build has when they differ.
+			if (wanted >= 0 && rank != wanted)
+				Label(x, y, x + width, y + height, std::to_string(rank) + (rank < wanted ? "<" : ">") + std::to_string(wanted), mark, LABEL_UPGRADE, square ? OUTLINE_UPGRADE : OUTLINE_PASSIVE);
+		}
+		else if (kind == "Choose_Skill")
+		{
+			Mark mark = SkillMark(Build, id);
+			if (mark != Mark::None)
+				Outline(x, y, x + width, y + height, mark, OUTLINE_SKILL);
+		}
+		// A specialization is listed only while another is taken; each brings its own support skill.
+		else if (kind == "Choose_Spec" && id == Build.support)
+			Outline(x, y, x + width, y + height, Mark::Todo, OUTLINE_SKILL);
+	}
 }
 
 // Runs after the UI has drawn.
@@ -300,8 +468,17 @@ static void DrawMarks(CInstance* Self)
 	RValue position = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("menu_position") });
 	if (!menu.IsString() || !position.IsString() || position.ToString() != "open")
 		return;
+	RValue old_color = g_Yytk->CallBuiltin("draw_get_color", {}), old_alpha = g_Yytk->CallBuiltin("draw_get_alpha", {});
+	RValue old_halign = g_Yytk->CallBuiltin("draw_get_halign", {}), old_valign = g_Yytk->CallBuiltin("draw_get_valign", {});
+	g_Yytk->CallBuiltin("draw_set_alpha", { RValue(1.0) });
 	if (menu.ToString() == "elements")
 		MarkLegacies(Self, build);
+	else if (menu.ToString() == "skills")
+		MarkSkills(Self, build);
+	g_Yytk->CallBuiltin("draw_set_halign", { old_halign });
+	g_Yytk->CallBuiltin("draw_set_valign", { old_valign });
+	g_Yytk->CallBuiltin("draw_set_color", { old_color });
+	g_Yytk->CallBuiltin("draw_set_alpha", { old_alpha });
 }
 
 #ifdef SLORM_DEV
@@ -313,7 +490,7 @@ static int g_DumpCount = 0;
 // Names that get printed in full: the ancestral legacy screen and what it reads.
 static bool Interesting(const std::string& Name)
 {
-	static const char* words[] = { "ele", "ancest", "gem", "realm", "stone", "legac", "aura", "hero", "class", "menu", "tree", "skill", "trait", "mba", "door", "coord" };
+	static const char* words[] = { "ele", "ancest", "gem", "realm", "stone", "legac", "aura", "hero", "class", "menu", "tree", "skill", "trait", "mba", "door", "coord", "equip", "temp", "attrib", "stat" };
 	std::string name = Lower(Name);
 	for (const char* word : words)
 		if (name.find(word) != std::string::npos) return true;
@@ -402,19 +579,27 @@ static void Tick(CInstance* Self, CInstance* Other)
 	std::lock_guard guard(g_Lock);
 
 	bool key_down = (GetAsyncKeyState(g_Appearance.hotkey) & 0x8000) != 0;
+	bool marks_key_down = (GetAsyncKeyState(g_Appearance.marks_hotkey) & 0x8000) != 0;
+	bool focused = GetForegroundWindow() == GetActiveWindow();
 	if (g_SuppressToggle)
 	{
 		// Wait for the newly bound key to be released.
-		if (!key_down)
+		if (!key_down && !marks_key_down)
 			g_SuppressToggle = false;
-		key_down = true;
+		key_down = marks_key_down = true;
 	}
-	else if (key_down && !g_KeyWasDown && GetForegroundWindow() == GetActiveWindow())
+	else if (focused && key_down && !g_KeyWasDown)
 	{
 		g_Visible = !g_Visible;
 		SaveConfig();
 	}
+	else if (focused && marks_key_down && !g_MarksKeyWasDown)
+	{
+		g_Marks = !g_Marks;
+		SaveConfig();
+	}
 	g_KeyWasDown = key_down;
+	g_MarksKeyWasDown = marks_key_down;
 
 	// A few times a second is plenty for a comparison.
 	static int wait = 0;
@@ -539,6 +724,6 @@ EXPORTED AurieStatus ModuleInitialize(
 		return status;
 	}
 
-	Log("v" SLORMHUD_VERSION " loaded, %d stats, %d builds, key %d shows/hides the overlay, config %s", static_cast<int>(g_Stats.size()), static_cast<int>(g_Builds.size()), g_Appearance.hotkey, g_ConfigPath.string().c_str());
+	Log("v" SLORMHUD_VERSION " loaded, %d stats, %d builds, keys %d and %d show/hide the overlay and the outlines, config %s", static_cast<int>(g_Stats.size()), static_cast<int>(g_Builds.size()), g_Appearance.hotkey, g_Appearance.marks_hotkey, g_ConfigPath.string().c_str());
 	return AURIE_SUCCESS;
 }

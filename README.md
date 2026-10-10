@@ -8,7 +8,7 @@ It only reads. It does not edit the character, items, or save.
 
 ## Use
 
-1. Press F7 to show or hide the window. The key can be changed on the Options tab.
+1. Press F3 to show or hide the window, and F4 to show or hide the outlines on the game's screens. Both keys can be changed on the Options tab.
 2. On the Imports tab, paste a slorm-planner share link and press Import. Several builds can be kept.
 3. The Build tab shows the selected build.
 

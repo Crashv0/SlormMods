@@ -296,6 +296,14 @@ int LegacyRealm(int Id)
 	return found != g_LegacyRealms.end() ? found->second : -1;
 }
 
+bool UpgradeIsSquare(int Hero, int Id)
+{
+	if (Hero < 0 || Hero > 2)
+		return false;
+	auto found = g_Skills[Hero].find(Id);
+	return found != g_Skills[Hero].end() && found->second.type == "upgrade";
+}
+
 std::string LegacyName(int Id) { return NameIn(g_Legacies, Id, "legacy"); }
 std::string RuneName(int Id) { return NameIn(g_Runes, Id, "rune"); }
 std::string AttributeName(int Id) { return NameIn(g_Traits, Id, "attribute"); }

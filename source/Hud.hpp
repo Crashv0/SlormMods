@@ -96,16 +96,17 @@ struct StatInfo
 // Overlay appearance, saved with the rest of the config.
 struct Appearance
 {
-	int theme = 3;
+	int theme = 2;
 	bool custom_accent = false;
 	float accent[3] = { 0.78f, 0.62f, 0.25f };
 	// Title bar, tabs, input fields and table headers.
 	bool custom_primary = false;
 	float primary[3] = { 0.16f, 0.29f, 0.48f };
-	float opacity = 0.95f;
+	float opacity = 1.0f;
 	float scale = 1.0f;
-	// Virtual-key code that shows or hides the overlay.
-	int hotkey = 0x76;
+	// Virtual-key codes: one shows or hides the overlay, one the outlines on the game's screens.
+	int hotkey = 0x72;
+	int marks_hotkey = 0x73;
 };
 
 // Guards everything below; the game step writes it, the overlay reads and edits it.
@@ -117,6 +118,35 @@ extern bool g_SuppressToggle;
 extern bool g_Visible;
 // Outline the build on the game's own screens.
 extern bool g_Marks;
+
+// The shapes the outlines come in, each with its own look.
+enum OutlineKind { OUTLINE_LEGACY, OUTLINE_SOCKET, OUTLINE_PASSIVE, OUTLINE_UPGRADE, OUTLINE_SKILL, OUTLINE_COUNT };
+struct OutlineStyle
+{
+	// Line thickness, and how far outside the icon's edge the line starts; both in screen units.
+	float width = 3;
+	float grow = 0;
+};
+extern OutlineStyle g_Outlines[OUTLINE_COUNT];
+extern const OutlineStyle OUTLINE_DEFAULTS[OUTLINE_COUNT];
+const char* OutlineName(int Kind);
+// Where the rank text sits against its icon, per screen.
+enum LabelKind { LABEL_LEGACY, LABEL_UPGRADE, LABEL_COUNT };
+enum LabelSide { SIDE_BOTTOM, SIDE_TOP, SIDE_LEFT, SIDE_RIGHT, SIDE_COUNT };
+struct LabelStyle
+{
+	int side = SIDE_BOTTOM;
+	// Moved from there by this much, in screen units.
+	float x = 0;
+	float y = 0;
+};
+extern LabelStyle g_Labels[LABEL_COUNT];
+extern const LabelStyle LABEL_DEFAULTS[LABEL_COUNT];
+
+// Colour of each Mark, as red, green, blue; indexed by the Mark's number, None unused.
+constexpr int MARK_COUNT = 5;
+extern float g_MarkColors[MARK_COUNT][3];
+extern const float MARK_DEFAULTS[MARK_COUNT][3];
 
 extern std::vector<Build> g_Builds;
 // Build shown on the Build tab, -1 for none.
@@ -138,8 +168,20 @@ struct Live
 	std::vector<int> stones;
 	// By realm, the tile a legacy sits on: not zero when stones turn it on.
 	std::vector<int> realms;
+	// By skill or upgrade id. An upgrade's rank; for a skill itself, its mastery experience.
+	std::vector<int> skill_ranks;
+	// By skill or upgrade id: above zero when equipped. Skills hold their slot, upgrades 1.
+	std::vector<int> skill_slots;
 };
 extern Live g_Live;
+
+// How one part of the character stands against the build. Todo is in the build and not there yet;
+// Wrong is there and not in the build, or in it with no rank; Partial has some ranks.
+enum class Mark { None, Match, Partial, Wrong, Todo };
+// An upgrade of a skill. Rank and Wanted come back as the ranks put in and the build's, -1 when the build has none.
+Mark UpgradeMark(const Build& Build, int Id, int& Rank, int& Wanted);
+// A skill: whether it is equipped as the build has it, and its upgrades with it.
+Mark SkillMark(const Build& Build, int Id);
 
 #ifdef SLORM_DEV
 // Dev builds only: write the game's variables to SlormHUD.dump.txt on the next step.
@@ -166,6 +208,8 @@ const char* HeroName(int Class);
 std::string SkillName(int Hero, int Id);
 // The skill an upgrade belongs to, -1 when it is not an upgrade.
 int UpgradeParent(int Hero, int Id);
+// The game draws its "upgrade" kind in a square frame and its "passive" kind in a round one.
+bool UpgradeIsSquare(int Hero, int Id);
 std::string LegacyName(int Id);
 // The tile of the ancestral legacy map a legacy sits on, -1 when unknown.
 int LegacyRealm(int Id);

@@ -16,9 +16,10 @@ INSTALL
   4. Start the game from Steam as usual
 
 USE
-  Press F7 to show or hide the SlormHUD window; the key can be changed on
-  the Options tab. On the Imports tab, paste a slorm-planner share link and
-  press Import.
+  Press F3 to show or hide the SlormHUD window, and F4 to show or hide the
+  outlines on the game's screens; both keys can be changed on the Options
+  tab. On the Imports tab, paste a slorm-planner share link and press
+  Import.
 
 UNINSTALL
   Delete these from the game folder:

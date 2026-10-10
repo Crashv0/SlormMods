@@ -78,7 +78,15 @@ static const BuildSkill* FindSkill(const Build& Build, int Id)
 	return nullptr;
 }
 
-static void DrawSkill(const Build& Build, const char* Role, int Id)
+static ImVec4 MarkColor(Mark Kind)
+{
+	if (Kind == Mark::None)
+		return ImGui::GetStyleColorVec4(ImGuiCol_Text);
+	const float* color = g_MarkColors[static_cast<int>(Kind)];
+	return { color[0], color[1], color[2], 1.0f };
+}
+
+static void DrawSkill(const Build& Build, const char* Role, int Id, bool Live)
 {
 	if (Id < 0)
 	{
@@ -88,21 +96,38 @@ static void DrawSkill(const Build& Build, const char* Role, int Id)
 	const BuildSkill* skill = FindSkill(Build, Id);
 	std::string title = std::string(Role) + ": " + SkillName(Build.hero, Id);
 	if (skill) title += ", level " + std::to_string(skill->level);
-	if (!ImGui::TreeNodeEx(title.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
+	Mark state = Live ? SkillMark(Build, Id) : Mark::None;
+	if (state == Mark::Todo) title += " (not equipped)";
+	ImGui::PushStyleColor(ImGuiCol_Text, MarkColor(state));
+	// The id after ### keeps the node open when its title changes.
+	bool open = ImGui::TreeNodeEx((title + "###" + Role).c_str(), ImGuiTreeNodeFlags_DefaultOpen);
+	ImGui::PopStyleColor();
+	if (!open)
 		return;
 	if (!skill || skill->upgrades.empty())
 		ImGui::TextDisabled("no upgrades");
 	else
 		for (const Ranked& upgrade : skill->upgrades)
-			ImGui::BulletText("%s, rank %d", SkillName(Build.hero, upgrade.id).c_str(), upgrade.rank);
+		{
+			std::string name = SkillName(Build.hero, upgrade.id);
+			int rank = 0, wanted = 0;
+			Mark mark = Live ? UpgradeMark(Build, upgrade.id, rank, wanted) : Mark::None;
+			if (mark == Mark::None) ImGui::BulletText("%s, rank %d", name.c_str(), upgrade.rank);
+			else if (mark == Mark::Match) ImGui::TextColored(MarkColor(Mark::Match), "%s: %d", name.c_str(), rank);
+			else if (mark == Mark::Todo) ImGui::TextColored(MarkColor(Mark::Todo), "%s: not equipped, %d %s %d", name.c_str(), rank, rank < wanted ? "<" : rank > wanted ? ">" : "=", wanted);
+			else ImGui::TextColored(MarkColor(mark), "%s: %d %s %d", name.c_str(), rank, rank < wanted ? "<" : ">", wanted);
+		}
 	ImGui::TreePop();
 }
 
 static void DrawSkills(const Build& Build)
 {
-	DrawSkill(Build, "Support", Build.support);
-	DrawSkill(Build, "Primary", Build.primary);
-	DrawSkill(Build, "Secondary", Build.secondary);
+	bool live = g_Live.valid && g_Live.hero == Build.hero && !g_Live.skill_slots.empty();
+	if (g_Live.valid && g_Live.hero != Build.hero)
+		ImGui::TextDisabled("Playing a %s; this build is for a %s.", HeroName(g_Live.hero), HeroName(Build.hero));
+	DrawSkill(Build, "Support", Build.support, live);
+	DrawSkill(Build, "Primary", Build.primary, live);
+	DrawSkill(Build, "Secondary", Build.secondary, live);
 
 	static const char* keys[] = { "Activable 1", "Activable 2", "Activable 3", "Activable 4" };
 	for (int i = 0; i < ACTIVABLE_COUNT; i++)
@@ -126,10 +151,6 @@ static void DrawReaper(const Build& Build)
 	if (Build.ultimatum >= 0)
 		ImGui::Text("%s, level %d", UltimatumName(Build.ultimatum).c_str(), Build.ultimatum_level);
 }
-
-static const ImVec4 TODO_COLOR = { 0.27f, 0.59f, 0.96f, 1.0f };
-static const ImVec4 MATCH_COLOR = { 0.45f, 0.85f, 0.45f, 1.0f };
-static const ImVec4 PARTIAL_COLOR = { 0.96f, 0.59f, 0.16f, 1.0f };
 
 static int At(const std::vector<int>& Values, int Index)
 {
@@ -161,7 +182,7 @@ static void DrawLegacy(const Build& Build)
 	bool stones_match = placed == static_cast<int>(wanted.size()) && !extra;
 	std::string stones = std::to_string(placed) + " of " + std::to_string(wanted.size()) + " stones placed";
 	if (extra) stones += ", " + std::to_string(extra) + " not in the build";
-	ImGui::TextColored(stones_match ? MATCH_COLOR : extra ? ERROR_COLOR : TODO_COLOR, "%s", stones.c_str());
+	ImGui::TextColored(stones_match ? MarkColor(Mark::Match) : extra ? MarkColor(Mark::Wrong) : MarkColor(Mark::Todo), "%s", stones.c_str());
 
 	if (Build.legacies.empty())
 		ImGui::TextDisabled("no legacies");
@@ -171,11 +192,11 @@ static void DrawLegacy(const Build& Build)
 		int rank = At(g_Live.legacy_ranks, legacy.id);
 		std::string name = LegacyName(legacy.id);
 		if (!active)
-			ImGui::TextColored(TODO_COLOR, "%s: not active, build has rank %d", name.c_str(), legacy.rank);
+			ImGui::TextColored(MarkColor(Mark::Todo), "%s: not active, build has rank %d", name.c_str(), legacy.rank);
 		else if (rank != legacy.rank)
-			ImGui::TextColored(rank ? PARTIAL_COLOR : ERROR_COLOR, "%s: %d %s %d", name.c_str(), rank, rank < legacy.rank ? "<" : ">", legacy.rank);
+			ImGui::TextColored(rank ? MarkColor(Mark::Partial) : MarkColor(Mark::Wrong), "%s: %d %s %d", name.c_str(), rank, rank < legacy.rank ? "<" : ">", legacy.rank);
 		else
-			ImGui::TextColored(MATCH_COLOR, "%s: %d", name.c_str(), legacy.rank);
+			ImGui::TextColored(MarkColor(Mark::Match), "%s: %d", name.c_str(), legacy.rank);
 	}
 }
 
@@ -470,74 +491,150 @@ static bool DrawOptions()
 	bool changed = false;
 	ImGui::SeparatorText("Appearance");
 	bool restyle = false;
-	ImGui::SetNextItemWidth(160);
-	restyle |= ImGui::Combo("Theme", &g_Appearance.theme, THEME_NAMES, 4);
-	restyle |= ImGui::Checkbox("Custom accent", &g_Appearance.custom_accent);
-	if (g_Appearance.custom_accent)
-	{
-		ImGui::SameLine();
-		restyle |= ImGui::ColorEdit3("##accent", g_Appearance.accent, ImGuiColorEditFlags_NoInputs);
-	}
-	restyle |= ImGui::Checkbox("Custom primary", &g_Appearance.custom_primary);
-	if (g_Appearance.custom_primary)
-	{
-		ImGui::SameLine();
-		restyle |= ImGui::ColorEdit3("##primary", g_Appearance.primary, ImGuiColorEditFlags_NoInputs);
-	}
-	ImGui::SetNextItemWidth(160);
-	restyle |= ImGui::SliderFloat("Opacity", &g_Appearance.opacity, 0.3f, 1.0f, "%.2f");
-	ImGui::SetNextItemWidth(160);
 	// Applied on release: resizing the text under the cursor makes the slider jump.
 	static float scale = 0;
-	if (!ImGui::IsAnyItemActive() || scale == 0)
-		scale = g_Appearance.scale;
-	ImGui::SliderFloat("Text size", &scale, 0.75f, 2.0f, "%.2f");
-	if (ImGui::IsItemDeactivatedAfterEdit())
+	if (ImGui::BeginTabBar("appearance"))
 	{
-		g_Appearance.scale = scale;
-		restyle = true;
-	}
-	changed |= ImGui::Checkbox("Outline the build on the game's screens", &g_Marks);
-	if (ImGui::Button("Reset appearance"))
-	{
-		int hotkey = g_Appearance.hotkey;
-		g_Appearance = Appearance();
-		g_Appearance.hotkey = hotkey;
-		scale = 0;
-		restyle = true;
+		if (ImGui::BeginTabItem("Window"))
+		{
+			ImGui::SetNextItemWidth(160);
+			restyle |= ImGui::Combo("Theme", &g_Appearance.theme, THEME_NAMES, 4);
+			restyle |= ImGui::Checkbox("Custom accent", &g_Appearance.custom_accent);
+			if (g_Appearance.custom_accent)
+			{
+				ImGui::SameLine();
+				restyle |= ImGui::ColorEdit3("##accent", g_Appearance.accent, ImGuiColorEditFlags_NoInputs);
+			}
+			restyle |= ImGui::Checkbox("Custom primary", &g_Appearance.custom_primary);
+			if (g_Appearance.custom_primary)
+			{
+				ImGui::SameLine();
+				restyle |= ImGui::ColorEdit3("##primary", g_Appearance.primary, ImGuiColorEditFlags_NoInputs);
+			}
+			ImGui::SetNextItemWidth(160);
+			restyle |= ImGui::SliderFloat("Opacity", &g_Appearance.opacity, 0.3f, 1.0f, "%.2f");
+			ImGui::SetNextItemWidth(160);
+			if (!ImGui::IsAnyItemActive() || scale == 0)
+				scale = g_Appearance.scale;
+			ImGui::SliderFloat("Text size", &scale, 0.75f, 2.0f, "%.2f");
+			if (ImGui::IsItemDeactivatedAfterEdit())
+			{
+				g_Appearance.scale = scale;
+				restyle = true;
+			}
+			if (ImGui::Button("Reset window"))
+			{
+				int hotkey = g_Appearance.hotkey, marks_hotkey = g_Appearance.marks_hotkey;
+				g_Appearance = Appearance();
+				g_Appearance.hotkey = hotkey;
+				g_Appearance.marks_hotkey = marks_hotkey;
+				scale = 0;
+				restyle = true;
+			}
+			ImGui::EndTabItem();
+		}
+		if (ImGui::BeginTabItem("Outlines"))
+		{
+			changed |= ImGui::Checkbox("Outline the build on the game's screens", &g_Marks);
+			ImGui::TextDisabled("Thickness of each line, and how far outside the icon it sits.");
+			for (int kind = 0; kind < OUTLINE_COUNT; kind++)
+			{
+				ImGui::PushID(kind);
+				ImGui::SetNextItemWidth(110);
+				changed |= ImGui::SliderFloat("##width", &g_Outlines[kind].width, 1, 12, "thick %.1f");
+				ImGui::SameLine();
+				ImGui::SetNextItemWidth(110);
+				changed |= ImGui::SliderFloat("##grow", &g_Outlines[kind].grow, -12, 12, "offset %.1f");
+				ImGui::SameLine();
+				ImGui::TextUnformatted(OutlineName(kind));
+				ImGui::PopID();
+			}
+			if (ImGui::Button("Reset outlines"))
+			{
+				std::copy(OUTLINE_DEFAULTS, OUTLINE_DEFAULTS + OUTLINE_COUNT, g_Outlines);
+				changed = true;
+			}
+			ImGui::EndTabItem();
+		}
+		if (ImGui::BeginTabItem("Rank text"))
+		{
+			ImGui::TextDisabled("Where the rank text sits, and how far to move it from there.");
+			static const char* label_names[] = { "Legacy ranks", "Upgrade ranks" };
+			static const char* sides[] = { "Bottom", "Top", "Left", "Right" };
+			for (int kind = 0; kind < LABEL_COUNT; kind++)
+			{
+				ImGui::PushID(kind);
+				ImGui::SetNextItemWidth(90);
+				changed |= ImGui::Combo("##side", &g_Labels[kind].side, sides, SIDE_COUNT);
+				ImGui::SameLine();
+				ImGui::SetNextItemWidth(90);
+				changed |= ImGui::SliderFloat("##x", &g_Labels[kind].x, -60, 60, "x %.0f");
+				ImGui::SameLine();
+				ImGui::SetNextItemWidth(90);
+				changed |= ImGui::SliderFloat("##y", &g_Labels[kind].y, -60, 60, "y %.0f");
+				ImGui::SameLine();
+				ImGui::TextUnformatted(label_names[kind]);
+				ImGui::PopID();
+			}
+			if (ImGui::Button("Reset rank text"))
+			{
+				std::copy(LABEL_DEFAULTS, LABEL_DEFAULTS + LABEL_COUNT, g_Labels);
+				changed = true;
+			}
+			ImGui::EndTabItem();
+		}
+		if (ImGui::BeginTabItem("Colors"))
+		{
+			ImGui::TextDisabled("Used by the outlines, the rank text and the Build tab.");
+			static const char* states[] = { "", "Matches the build", "Some ranks in", "Not in the build, or no ranks", "Still to place" };
+			for (int kind = 1; kind < MARK_COUNT; kind++)
+				changed |= ImGui::ColorEdit3(states[kind], g_MarkColors[kind], ImGuiColorEditFlags_NoInputs);
+			if (ImGui::Button("Reset colors"))
+			{
+				memcpy(g_MarkColors, MARK_DEFAULTS, sizeof(g_MarkColors));
+				changed = true;
+			}
+			ImGui::EndTabItem();
+		}
+		ImGui::EndTabBar();
 	}
 	if (restyle)
 		ApplyAppearance();
 
-	ImGui::SeparatorText("Hotkey");
-	static bool capturing = false;
+	ImGui::SeparatorText("Hotkeys");
+	// Which key is being rebound, -1 for none.
+	static int capturing = -1;
 	// A key held when capture starts must be released first, or it would be taken at once.
 	static bool armed = false;
-	if (capturing)
+	int* keys[] = { &g_Appearance.hotkey, &g_Appearance.marks_hotkey };
+	static const char* uses[] = { "shows or hides the overlay", "shows or hides the outlines" };
+	for (int i = 0; i < 2; i++)
 	{
-		g_SuppressToggle = true;
-		ImGui::Button("Press a key (Esc cancels)", { 220, 0 });
-		int key = PressedKey();
-		if (!armed)
-			armed = key == 0;
-		else if (key == VK_ESCAPE)
-			capturing = false;
-		else if (key)
+		ImGui::PushID(i);
+		if (capturing == i)
 		{
-			g_Appearance.hotkey = key;
-			capturing = false;
-			changed = true;
+			g_SuppressToggle = true;
+			ImGui::Button("Press a key (Esc cancels)", { 220, 0 });
+			int key = PressedKey();
+			if (!armed)
+				armed = key == 0;
+			else if (key == VK_ESCAPE)
+				capturing = -1;
+			else if (key)
+			{
+				*keys[i] = key;
+				capturing = -1;
+				changed = true;
+			}
 		}
-	}
-	else
-	{
-		if (ImGui::Button(KeyName(g_Appearance.hotkey).c_str(), { 220, 0 }))
+		else if (ImGui::Button(KeyName(*keys[i]).c_str(), { 220, 0 }))
 		{
-			capturing = true;
+			capturing = i;
 			armed = false;
 		}
 		ImGui::SameLine();
-		ImGui::TextUnformatted("shows or hides the overlay");
+		ImGui::TextUnformatted(uses[i]);
+		ImGui::PopID();
 	}
 
 	ImGui::SeparatorText("About");
