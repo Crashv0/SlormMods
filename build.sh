@@ -37,19 +37,33 @@ echo "$VARIANT" > obj/variant
 
 if [ "${1:-}" = deploy ] || [ "${1:-}" = play ]; then
 	[ -d "$GAME/mods/Aurie" ] || { echo "set SLORM_GAME to the game folder (it must contain mods/Aurie)" >&2; exit 1; }
+	# The list is read whole: a grep that stops early would fail the pipe.
+	running() { [ "$(tasklist.exe 2>/dev/null | grep -ci "^The Slormancer.exe")" != 0 ]; }
+	if running; then echo "the game is running; the build goes in when it closes"; else echo "the game is closed"; fi
 	until cp bin/SlormSuite.dll "$GAME/mods/Aurie/" 2>/dev/null; do
-		echo "waiting for the game to release SlormSuite.dll..."; sleep 3
+		sleep 3
 	done
 	echo "deployed to $GAME/mods/Aurie"
 	if [ "$1" = play ]; then
 		# Steam's id for the game is kept next to its exe; Steam itself sits three folders up.
 		APP=$(tr -d '\r\n' < "$GAME/steam_appid.txt")
-		if [ -f "$GAME/../../../steam.exe" ]; then
-			(cd "$GAME/../../.." && ./steam.exe -applaunch "$APP" >/dev/null 2>&1 &)
-		else
-			(cd /mnt/c && cmd.exe /c start "" "steam://rungameid/$APP" >/dev/null 2>&1) || true
-		fi
-		echo "started the game"
+		launch() {
+			if [ -f "$GAME/../../../steam.exe" ]; then
+				(cd "$GAME/../../.." && ./steam.exe -applaunch "$APP" >/dev/null 2>&1 &)
+			else
+				(cd /mnt/c && cmd.exe /c start "" "steam://rungameid/$APP" >/dev/null 2>&1) || true
+			fi
+		}
+		# Steam ignores a launch made while it is still closing the game down, so ask again until it shows.
+		for try in 1 2 3; do
+			launch
+			for wait in 1 2 3 4 5 6 7 8 9 10; do
+				running && { echo "the game is running with the new build"; exit 0; }
+				sleep 3
+			done
+		done
+		echo "the game did not start; start it from Steam" >&2
+		exit 1
 	fi
 fi
 
