@@ -85,7 +85,7 @@ bool KeyButton(const char* Id, int* Key)
 	if (capturing == id)
 	{
 		g_SuppressToggle = true;
-		ImGui::Button("Press a key (Esc cancels)", { 220, 0 });
+		ImGui::Button("Press a key (Esc cancels)");
 		int key = PressedKey();
 		if (!armed)
 			armed = key == 0;
@@ -98,7 +98,7 @@ bool KeyButton(const char* Id, int* Key)
 			changed = true;
 		}
 	}
-	else if (ImGui::Button(KeyName(*Key).c_str(), { 220, 0 }))
+	else if (ImGui::Button(KeyName(*Key).c_str(), { ImGui::GetFontSize() * 6, 0 }))
 	{
 		capturing = id;
 		armed = false;
@@ -233,25 +233,35 @@ static bool Slider(const char* Label, float* Value, float Low, float High, const
 	return changed;
 }
 
-static bool DrawTweaks()
+static bool DrawFeature(Feature* feature)
+{
+	ImGui::PushID(feature->key);
+	bool changed = ImGui::Checkbox(feature->name, &feature->enabled);
+	if (ImGui::IsItemHovered() && feature->summary[0])
+	{
+		ImGui::BeginTooltip();
+		ImGui::PushTextWrapPos(ImGui::GetFontSize() * 26);
+		ImGui::TextUnformatted(feature->summary);
+		ImGui::PopTextWrapPos();
+		ImGui::EndTooltip();
+	}
+	if (feature->tab)
+		changed |= feature->Draw();
+	else if (feature->enabled)
+	{
+		ImGui::Indent();
+		changed |= feature->Draw();
+		ImGui::Unindent();
+	}
+	ImGui::PopID();
+	return changed;
+}
+
+static bool DrawMods()
 {
 	bool changed = false;
-	if (Features().empty())
-		ImGui::TextDisabled("No tweaks yet.");
 	for (Feature* feature : Features())
-	{
-		ImGui::PushID(feature->key);
-		changed |= ImGui::Checkbox(feature->name, &feature->enabled);
-		if (ImGui::IsItemHovered() && feature->summary[0])
-			ImGui::SetTooltip("%s", feature->summary);
-		if (feature->enabled)
-		{
-			ImGui::Indent();
-			changed |= feature->Draw();
-			ImGui::Unindent();
-		}
-		ImGui::PopID();
-	}
+		if (!feature->tab) changed |= DrawFeature(feature);
 	return changed;
 }
 
@@ -355,14 +365,38 @@ static void DrawWindow()
 	bool changed = false;
 	if (ImGui::BeginTabBar("tabs"))
 	{
-		if (ImGui::BeginTabItem("Tweaks"))
+		if (ImGui::BeginTabItem("Mods"))
 		{
-			changed |= DrawTweaks();
+			changed |= DrawMods();
+			ImGui::EndTabItem();
+		}
+		for (Feature* feature : Features())
+		{
+			if (!feature->tab || !ImGui::BeginTabItem(feature->tab))
+				continue;
+			changed |= DrawFeature(feature);
 			ImGui::EndTabItem();
 		}
 		if (ImGui::BeginTabItem("Options"))
 		{
-			changed |= DrawOptions();
+			if (ImGui::BeginTabBar("options"))
+			{
+				if (ImGui::BeginTabItem("General"))
+				{
+					changed |= DrawOptions();
+					ImGui::EndTabItem();
+				}
+				for (Feature* feature : Features())
+				{
+					if (!feature->appearance || !ImGui::BeginTabItem(feature->tab ? feature->tab : feature->name))
+						continue;
+					ImGui::PushID(feature->key);
+					changed |= feature->DrawAppearance();
+					ImGui::PopID();
+					ImGui::EndTabItem();
+				}
+				ImGui::EndTabBar();
+			}
 			ImGui::EndTabItem();
 		}
 #ifdef SLORM_DEV
@@ -409,12 +443,6 @@ static void Frame(IDXGISwapChain* swapchain, UINT flags)
 		Aurie::DbgPrintEx(Aurie::LOG_SEVERITY_INFO, "[SlormSuite] overlay ready");
 	}
 
-	if (!g_Visible)
-	{
-		g_HideMouse = false;
-		return;
-	}
-
 	ID3D11Texture2D* buffer = nullptr;
 	ID3D11RenderTargetView* view = nullptr;
 	if (FAILED(swapchain->GetBuffer(0, IID_PPV_ARGS(&buffer))))
@@ -454,7 +482,12 @@ static void Frame(IDXGISwapChain* swapchain, UINT flags)
 	ImGui::NewFrame();
 	// The game draws its own cursor under the overlay.
 	ImGui::GetIO().MouseDrawCursor = ImGui::GetIO().WantCaptureMouse;
-	DrawWindow();
+	if (g_Visible) DrawWindow();
+	{
+		std::lock_guard guard(g_Lock);
+		for (Feature* feature : Features())
+			if (feature->enabled) feature->Hud();
+	}
 	ImGui::Render();
 	g_HideMouse = io.WantCaptureMouse;
 

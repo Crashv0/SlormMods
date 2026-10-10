@@ -58,6 +58,11 @@ static void LoadConfig()
 	}
 }
 
+std::string ModFolder()
+{
+	return g_ConfigPath.parent_path().string();
+}
+
 void SaveConfig()
 {
 	std::ofstream file(g_ConfigPath);

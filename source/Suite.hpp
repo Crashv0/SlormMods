@@ -30,10 +30,12 @@ extern bool g_SuppressToggle;
 extern bool g_Visible;
 
 void SaveConfig();
+// Where the mod's files sit: the folder of its DLL.
+std::string ModFolder();
 // A button showing a key; clicking it takes the next key pressed. True when the key changed.
 bool KeyButton(const char* Id, int* Key);
 
-// One tweak of the suite. Each lives in its own file under features/ and adds itself to the list.
+// One mod of the suite. Each lives in its own file under features/ and adds itself to the list.
 struct Feature
 {
 	// Shown in the overlay.
@@ -41,6 +43,8 @@ struct Feature
 	// Starts its lines in the config; no spaces.
 	const char* key;
 	const char* summary;
+	// Names its own tab in the overlay; without one it is a line of the Mods tab.
+	const char* tab = nullptr;
 	bool enabled = false;
 
 	Feature(const char* Name, const char* Key, const char* Summary);
@@ -49,8 +53,13 @@ struct Feature
 	virtual void Start() {}
 	// Each step of the game's UI object while enabled.
 	virtual void Tick(YYTK::CInstance* Self) {}
-	// Its settings in the overlay, shown while enabled; true when something to save changed.
+	// Its settings in the overlay, shown while enabled or in its own tab; true when something to save changed.
 	virtual bool Draw() { return false; }
+	// Set by a feature with looks to choose: it gets a tab of its own under Options, drawn by this.
+	bool appearance = false;
+	virtual bool DrawAppearance() { return false; }
+	// Drawn over the game each frame while enabled, with the overlay shown or not.
+	virtual void Hud() {}
 	// One "key.Name ..." line of the config.
 	virtual void Load(const std::string& Name, std::istringstream& Words) {}
 	// Writes its settings as "key.name value" lines.
@@ -87,7 +96,7 @@ struct Dev
 	bool want_dump = false;
 	std::string dump_note;
 	// Names holding any of these words are printed in full; comma separated.
-	std::string dump_words = "menu,launch,room,run,floor,breach,portal,temple,forge,hub,citizen,mission,level";
+	std::string dump_words = "menu,launch,room,run,floor,breach,portal,temple,forge,hub,citizen,mission,level,chest,challenge,choice,wave,war_,reward,procedural,controller";
 	std::string result;
 	bool trace = true;
 };
