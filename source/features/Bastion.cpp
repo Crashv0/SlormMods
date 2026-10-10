@@ -162,7 +162,7 @@ namespace
 			{
 				changed |= KeyButton("hold", &hold_key);
 				ImGui::SameLine();
-				ImGui::TextUnformatted("do not exit while this key is pressed");
+				ImGui::TextUnformatted("do not exit while this key is held");
 			}
 			return changed;
 		}
