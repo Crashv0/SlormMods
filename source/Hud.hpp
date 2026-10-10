@@ -120,7 +120,7 @@ extern bool g_Visible;
 extern bool g_Marks;
 
 // The shapes the outlines come in, each with its own look.
-enum OutlineKind { OUTLINE_LEGACY, OUTLINE_SOCKET, OUTLINE_PASSIVE, OUTLINE_UPGRADE, OUTLINE_SKILL, OUTLINE_COUNT };
+enum OutlineKind { OUTLINE_LEGACY, OUTLINE_SOCKET, OUTLINE_PASSIVE, OUTLINE_UPGRADE, OUTLINE_SKILL, OUTLINE_BAR, OUTLINE_COUNT };
 struct OutlineStyle
 {
 	// Line thickness, and how far outside the icon's edge the line starts; both in screen units.
@@ -172,6 +172,8 @@ struct Live
 	std::vector<int> skill_ranks;
 	// By skill or upgrade id: above zero when equipped. Skills hold their slot, upgrades 1.
 	std::vector<int> skill_slots;
+	// The numbered slots of the skill bar, -1 when empty. Numbered as the build's activables are.
+	std::vector<int> activables;
 };
 extern Live g_Live;
 
@@ -182,6 +184,13 @@ enum class Mark { None, Match, Partial, Wrong, Todo };
 Mark UpgradeMark(const Build& Build, int Id, int& Rank, int& Wanted);
 // A skill: whether it is equipped as the build has it, and its upgrades with it.
 Mark SkillMark(const Build& Build, int Id);
+// The game's slot numbers for the two attack skills.
+constexpr int SLOT_PRIMARY = 2;
+constexpr int SLOT_SECONDARY = 3;
+// Each class's first three skills are its support skills.
+constexpr int SUPPORT_SKILLS = 3;
+// True when the skill is equipped, but in the other attack slot than the build has it.
+bool SkillInWrongSlot(const Build& Build, int Id);
 
 #ifdef SLORM_DEV
 // Dev builds only: write the game's variables to SlormHUD.dump.txt on the next step.

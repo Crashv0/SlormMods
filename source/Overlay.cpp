@@ -95,9 +95,9 @@ static void DrawSkill(const Build& Build, const char* Role, int Id, bool Live)
 	}
 	const BuildSkill* skill = FindSkill(Build, Id);
 	std::string title = std::string(Role) + ": " + SkillName(Build.hero, Id);
-	if (skill) title += ", level " + std::to_string(skill->level);
 	Mark state = Live ? SkillMark(Build, Id) : Mark::None;
 	if (state == Mark::Todo) title += " (not equipped)";
+	else if (Live && SkillInWrongSlot(Build, Id)) title += " (in the other slot)";
 	ImGui::PushStyleColor(ImGuiCol_Text, MarkColor(state));
 	// The id after ### keeps the node open when its title changes.
 	bool open = ImGui::TreeNodeEx((title + "###" + Role).c_str(), ImGuiTreeNodeFlags_DefaultOpen);

@@ -20,8 +20,8 @@ Appearance g_Appearance;
 bool g_SuppressToggle = false;
 bool g_Visible = true;
 bool g_Marks = true;
-const OutlineStyle OUTLINE_DEFAULTS[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 } };
-OutlineStyle g_Outlines[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 } };
+const OutlineStyle OUTLINE_DEFAULTS[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 }, { 4, 0 } };
+OutlineStyle g_Outlines[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 }, { 4, 0 } };
 
 const LabelStyle LABEL_DEFAULTS[LABEL_COUNT] = { { SIDE_BOTTOM, 0, 0 }, { SIDE_BOTTOM, 0, -8 } };
 LabelStyle g_Labels[LABEL_COUNT] = { { SIDE_BOTTOM, 0, 0 }, { SIDE_BOTTOM, 0, -8 } };
@@ -32,7 +32,7 @@ float g_MarkColors[MARK_COUNT][3] = { { 1, 1, 1 }, { 0.35f, 0.82f, 0.35f }, { 0.
 
 const char* OutlineName(int Kind)
 {
-	static const char* names[] = { "Legacies", "Stone sockets", "Round upgrades", "Square upgrades", "Skills" };
+	static const char* names[] = { "Legacies", "Stone sockets", "Round upgrades", "Square upgrades", "Skills", "Skill bar pickers" };
 	return Kind >= 0 && Kind < OUTLINE_COUNT ? names[Kind] : "";
 }
 
@@ -205,6 +205,7 @@ static void ReadLive(CInstance* Self)
 		live.skill_ranks = HeroRow(global("skill_rank"), live.hero);
 		live.skill_slots = HeroRow(global("skill_equipped"), live.hero);
 	}
+	live.activables = HeroRow(global("aura_array"), live.hero);
 	live.valid = !live.legacy_ranks.empty() && !live.stones.empty() && !live.realms.empty();
 	g_Live = std::move(live);
 }
@@ -233,6 +234,14 @@ Mark UpgradeMark(const Build& Build, int Id, int& Rank, int& Wanted)
 	return Rank == Wanted ? Mark::Match : Rank == 0 ? Mark::Wrong : Mark::Partial;
 }
 
+bool SkillInWrongSlot(const Build& Build, int Id)
+{
+	int slot = At(g_Live.skill_slots, Id);
+	if (Id == Build.primary) return slot > 0 && slot != SLOT_PRIMARY;
+	if (Id == Build.secondary) return slot > 0 && slot != SLOT_SECONDARY;
+	return false;
+}
+
 Mark SkillMark(const Build& Build, int Id)
 {
 	bool wanted = Id == Build.support || Id == Build.primary || Id == Build.secondary;
@@ -241,6 +250,8 @@ Mark SkillMark(const Build& Build, int Id)
 		return equipped ? Mark::Wrong : Mark::None;
 	if (!equipped)
 		return Mark::Todo;
+	if (SkillInWrongSlot(Build, Id))
+		return Mark::Partial;
 	int rank = 0, target = 0;
 	for (int id = 0; id < static_cast<int>(g_Live.skill_slots.size()); id++)
 	{
@@ -265,7 +276,7 @@ static void Outline(double Left, double Top, double Right, double Bottom, Mark K
 {
 	const OutlineStyle& style = g_Outlines[Shape];
 	double width = std::clamp(static_cast<double>(style.width), 1.0, 20.0), grow = style.grow;
-	if (Shape == OUTLINE_UPGRADE || Shape == OUTLINE_SKILL)
+	if (Shape == OUTLINE_UPGRADE || Shape == OUTLINE_SKILL || Shape == OUTLINE_BAR)
 	{
 		g_Yytk->CallBuiltin("draw_set_color", { RValue(MarkColor(Kind)) });
 		double l = Left - grow, t = Top - grow, r = Right + grow, b = Bottom + grow;
@@ -455,6 +466,69 @@ static void MarkSkills(CInstance* Self, const Build& Build)
 	}
 }
 
+// The skill occupying one of the bar's skill slots, -1 for none. The support slot takes whichever support skill is equipped.
+static int SkillInSlot(const Build& Build, int Slot)
+{
+	for (int id = 0; id < static_cast<int>(g_Live.skill_slots.size()); id++)
+	{
+		if (UpgradeParent(Build.hero, id) >= 0 || g_Live.skill_slots[id] <= 0)
+			continue;
+		bool support = id < SUPPORT_SKILLS;
+		if (Slot == 0 ? support : !support && g_Live.skill_slots[id] == Slot) return id;
+	}
+	return -1;
+}
+
+// The list that opens above a slot of the skill bar to change what it holds.
+static void MarkBar(CInstance* Self, const Build& Build)
+{
+	auto get = [&](const char* Name) { return g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue(Name) }); };
+	int primary = SkillInSlot(Build, SLOT_PRIMARY), secondary = SkillInSlot(Build, SLOT_SECONDARY), support = SkillInSlot(Build, 0);
+
+	double scale = ToNumber(g_Yytk->CallBuiltin("variable_global_get", { RValue("ui_scale") }));
+	if (scale <= 0)
+		scale = 1;
+
+	// The list is only there while a slot is being changed.
+	RValue rows = get("act_array"), type = get("panel_type"), value = get("panel_val");
+	if (!rows.IsArray() || !type.IsString() || type.ToString().empty())
+		return;
+	int wanted = -1, held = -1;
+	if (type.ToString() == "aura")
+	{
+		int index = static_cast<int>(ToNumber(value));
+		if (index < 0 || index >= ACTIVABLE_COUNT)
+			return;
+		wanted = Build.activables[index];
+		held = index < static_cast<int>(g_Live.activables.size()) ? g_Live.activables[index] : -1;
+	}
+	else if (value.IsString())
+	{
+		std::string which = value.ToString();
+		if (which == "primary_skill") { wanted = Build.primary; held = primary; }
+		else if (which == "secondary_skill") { wanted = Build.secondary; held = secondary; }
+		else if (which == "support_skill") { wanted = Build.support; held = support; }
+		else return;
+	}
+	for (const RValue& entry : rows.ToVector())
+	{
+		if (!entry.IsArray())
+			continue;
+		// [left, top, right, bottom, "auras" or 0, ?, sprite, skill id, activable id or side, ...]
+		std::vector<RValue> fields = entry.ToVector();
+		if (fields.size() < 9)
+			continue;
+		bool aura = fields[4].IsString();
+		int id = static_cast<int>(ToNumber(fields[aura ? 8 : 7]));
+		if (id != wanted && id != held)
+			continue;
+		// The icon is a square at the row's left end.
+		double left = ToNumber(fields[0]), top = ToNumber(fields[1]), bottom = ToNumber(fields[3]), inset = 6 * scale;
+		Mark mark = id != wanted ? Mark::Wrong : id == held ? Mark::Match : Mark::Todo;
+		Outline(left + inset, top + inset, left + (bottom - top) - inset, bottom - inset, mark, OUTLINE_BAR);
+	}
+}
+
 // Runs after the UI has drawn.
 static void DrawMarks(CInstance* Self)
 {
@@ -466,12 +540,18 @@ static void DrawMarks(CInstance* Self)
 		return;
 	RValue menu = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("menu_show") });
 	RValue position = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("menu_position") });
-	if (!menu.IsString() || !position.IsString() || position.ToString() != "open")
+	if (!menu.IsString() || !position.IsString())
+		return;
+	// The skill bar's pickers open with no menu up; a menu is marked once it has slid into place.
+	bool bar = menu.ToString() == "none";
+	if (!bar && position.ToString() != "open")
 		return;
 	RValue old_color = g_Yytk->CallBuiltin("draw_get_color", {}), old_alpha = g_Yytk->CallBuiltin("draw_get_alpha", {});
 	RValue old_halign = g_Yytk->CallBuiltin("draw_get_halign", {}), old_valign = g_Yytk->CallBuiltin("draw_get_valign", {});
 	g_Yytk->CallBuiltin("draw_set_alpha", { RValue(1.0) });
-	if (menu.ToString() == "elements")
+	if (bar)
+		MarkBar(Self, build);
+	else if (menu.ToString() == "elements")
 		MarkLegacies(Self, build);
 	else if (menu.ToString() == "skills")
 		MarkSkills(Self, build);
@@ -490,8 +570,10 @@ static int g_DumpCount = 0;
 // Names that get printed in full: the ancestral legacy screen and what it reads.
 static bool Interesting(const std::string& Name)
 {
-	static const char* words[] = { "ele", "ancest", "gem", "realm", "stone", "legac", "aura", "hero", "class", "menu", "tree", "skill", "trait", "mba", "door", "coord", "equip", "temp", "attrib", "stat" };
+	static const char* words[] = { "ele", "ancest", "gem", "realm", "stone", "legac", "aura", "hero", "class", "menu", "tree", "skill", "trait", "mba", "door", "coord", "equip", "temp", "attrib", "stat", "act_", "panel", "activ", "tooltip" };
 	std::string name = Lower(Name);
+	if (name == "mb")
+		return true;
 	for (const char* word : words)
 		if (name.find(word) != std::string::npos) return true;
 	return false;
