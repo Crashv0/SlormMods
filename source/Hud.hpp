@@ -122,7 +122,7 @@ extern bool g_Visible;
 extern bool g_Marks;
 
 // The shapes the outlines come in, each with its own look.
-enum OutlineKind { OUTLINE_LEGACY, OUTLINE_SOCKET, OUTLINE_PASSIVE, OUTLINE_UPGRADE, OUTLINE_SKILL, OUTLINE_BAR, OUTLINE_ATTRIBUTE, OUTLINE_REAPER, OUTLINE_RUNE, OUTLINE_GEAR, OUTLINE_PIP, OUTLINE_COUNT };
+enum OutlineKind { OUTLINE_LEGACY, OUTLINE_SOCKET, OUTLINE_PASSIVE, OUTLINE_UPGRADE, OUTLINE_SKILL, OUTLINE_BAR, OUTLINE_ATTRIBUTE, OUTLINE_REAPER, OUTLINE_RUNE, OUTLINE_GEAR, OUTLINE_PIP, OUTLINE_SPECIAL, OUTLINE_COUNT };
 struct OutlineStyle
 {
 	// Line thickness, and how far outside the icon's edge the line starts; both in screen units.

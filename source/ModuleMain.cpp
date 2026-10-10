@@ -21,8 +21,8 @@ bool g_SuppressToggle = false;
 bool g_Visible = true;
 bool g_Marks = true;
 // For the tooltip's pips the thickness is the pip's size.
-const OutlineStyle OUTLINE_DEFAULTS[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 }, { 11.1f, -8.5f }, { 5.8f, 3.8f }, { 4, 0 }, { 3, 0 }, { 2.7f, 5.1f, 0, 4.1f }, { 12, 0 } };
-OutlineStyle g_Outlines[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 }, { 11.1f, -8.5f }, { 5.8f, 3.8f }, { 4, 0 }, { 3, 0 }, { 2.7f, 5.1f, 0, 4.1f }, { 12, 0 } };
+const OutlineStyle OUTLINE_DEFAULTS[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 }, { 11.1f, -8.5f }, { 5.8f, 3.8f }, { 4, 0 }, { 3, 0 }, { 2.7f, 5.1f, 0, 4.1f }, { 12, 0 }, { 3, 0 } };
+OutlineStyle g_Outlines[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 }, { 11.1f, -8.5f }, { 5.8f, 3.8f }, { 4, 0 }, { 3, 0 }, { 2.7f, 5.1f, 0, 4.1f }, { 12, 0 }, { 3, 0 } };
 
 const LabelStyle LABEL_DEFAULTS[LABEL_COUNT] = { { SIDE_BOTTOM, 0, 0 }, { SIDE_BOTTOM, 0, -8 }, { SIDE_LEFT, -6, 0 } };
 LabelStyle g_Labels[LABEL_COUNT] = { { SIDE_BOTTOM, 0, 0 }, { SIDE_BOTTOM, 0, -8 }, { SIDE_LEFT, -6, 0 } };
@@ -33,7 +33,7 @@ float g_MarkColors[MARK_COUNT][3] = { { 1, 1, 1 }, { 0.35f, 0.82f, 0.35f }, { 0.
 
 const char* OutlineName(int Kind)
 {
-	static const char* names[] = { "Legacies", "Stone sockets", "Round upgrades", "Square upgrades", "Skills", "Skill bar pickers", "Attributes", "Reapers", "Runes", "Gear slots", "Tooltip pips" };
+	static const char* names[] = { "Legacies", "Stone sockets", "Round upgrades", "Square upgrades", "Skills", "Skill bar pickers", "Attributes", "Reapers", "Runes", "Gear slots", "Tooltip pips", "Tooltip special stats" };
 	return Kind >= 0 && Kind < OUTLINE_COUNT ? names[Kind] : "";
 }
 
@@ -524,7 +524,7 @@ static void Outline(double Left, double Top, double Right, double Bottom, Mark K
 	double x = (Left + Right) / 2 - nudge, y = (Top + Bottom) / 2 - nudge, radius = (std::max)(1.0, (Right - Left) / 2 + grow);
 	// Drawn as a strip of triangles: the game's own circle lands off the centre.
 	// Four steps make a square stood on its corner, as the attribute icons are.
-	bool diamond = Shape == OUTLINE_ATTRIBUTE;
+	bool diamond = Shape == OUTLINE_ATTRIBUTE || Shape == OUTLINE_SPECIAL;
 	int steps = diamond ? 4 : 40;
 	// Corner to corner the line is wider than it is across.
 	double outer = radius + (diamond ? width * 1.41421356 : width);
@@ -836,12 +836,13 @@ static void MarkTooltip(CInstance* Self, const Build& Build)
 	double scrolled = panel.size() > 5 ? ToNumber(panel[5]) : 0;
 	if (scrolled == 0)
 		scrolled = ToNumber(get("subtooltip_surfs_scroll"));
-	double panel_top = ToNumber(panel[2]), panel_bottom = ToNumber(g_Yytk->CallBuiltin("display_get_gui_height", {}));
+	// What shows is the full height less how far it can scroll.
+	double panel_top = ToNumber(panel[2]), panel_bottom = panel_top + (panel.size() > 4 ? ToNumber(panel[3]) - ToNumber(panel[4]) : 2000.0);
 	top -= scrolled;
 #ifdef SLORM_DEV
 	// The panel's numbers, logged as they change, to learn how scrolling shows in them.
 	static std::string logged_panel;
-	std::string now = Show(panels, 2, 8) + " scroll " + Show(get("subtooltip_surfs_scroll"), 1, 8);
+	std::string now = Show(panels, 2, 8) + " scroll " + Show(get("subtooltip_surfs_scroll"), 1, 8) + " lines " + Show(lines, 2, 20);
 	if (now != logged_panel)
 	{
 		logged_panel = now;
@@ -900,6 +901,27 @@ static void MarkTooltip(CInstance* Self, const Build& Build)
 			double y = top + ToNumber(fields[1]);
 			if (y >= panel_top + 8 * scale && y <= panel_bottom)
 				Pip(bar, y, StatAgainst(*wanted, held, affix, note));
+			break;
+		}
+	}
+
+	// The reaper smith, mastery and attribute each have a row lower down, with a diamond icon left of the bar.
+	for (const LiveAffix& affix : held.affixes)
+	{
+		int build_id = affix.tier == "RP" ? wanted->smith : affix.tier == "MA" ? wanted->mastery : affix.tier == "AT" ? wanted->attribute : -2;
+		if (build_id == -2)
+			continue;
+		int build_value = affix.tier == "RP" ? wanted->smith_value : affix.tier == "MA" ? wanted->mastery_value : wanted->attribute_value;
+		Mark mark = affix.id != build_id ? Mark::Wrong : affix.roll >= build_value ? Mark::Match : Mark::Partial;
+		for (const RValue& entry : line_list)
+		{
+			std::vector<RValue> fields = entry.IsArray() ? entry.ToVector() : std::vector<RValue>();
+			if (fields.size() < 2 || !fields[0].IsString() || fields[0].ToString() != affix.tier)
+				continue;
+			// The icon's middle sits 78 left of the bar and 23 below where a stat's pip would, on a 1920-wide screen.
+			double x = bar - 78 * scale, y = top + ToNumber(fields[1]) + 23 * scale, half = 21 * scale;
+			if (y - half >= panel_top && y + half <= panel_bottom)
+				Outline(x - half, y - half, x + half, y + half, mark, OUTLINE_SPECIAL);
 			break;
 		}
 	}
