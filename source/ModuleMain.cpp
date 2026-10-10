@@ -923,8 +923,13 @@ static void MarkAttributes(CInstance* Self, const Build& Build)
 		if (rank == wanted)
 			continue;
 		Label(row.x, row.y, row.x + row.size, row.y + row.size, std::to_string(rank) + (rank < wanted ? "<" : ">") + std::to_string(wanted), mark, LABEL_ATTRIBUTE, OUTLINE_ATTRIBUTE);
+		// The bar shows the points put in, then the ones gear adds, so the build's end lies that much further along.
+		int bonus = 0;
+		for (const LiveItem& item : g_Live.gear)
+			for (const LiveAffix& affix : item.affixes)
+				if (affix.tier == "AT" && affix.id == id) bonus += static_cast<int>(affix.roll);
 		// The first point starts 32 in, and each is 8 wide.
-		double at = row.bar_left + (32 + 8 * wanted) * scale;
+		double at = row.bar_left + (32 + 8 * (wanted + bonus)) * scale;
 		g_Yytk->CallBuiltin("draw_set_color", { RValue(MarkColor(mark)) });
 		g_Yytk->CallBuiltin("draw_rectangle", { RValue(at - 2 * scale), RValue(row.bar_top - 4 * scale), RValue(at + 2 * scale - 1), RValue(row.bar_top + row.bar_height + 4 * scale - 1), RValue(false) });
 	}
@@ -1325,7 +1330,11 @@ static void DrawMarks(CInstance* Self)
 	{
 		RValue shown = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("show_tooltip") });
 		RValue type = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("tooltip_type") });
-		g_OnlyHovered = ToNumber(shown) != 0 && type.IsString() && (type.ToString() == "item" || type.ToString() == "weapon");
+		// Items, reapers, runes and ultimatums open a large tooltip; the small help ones do not cover much.
+		RValue about = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("tooltip_value") });
+		std::string kind = type.IsString() ? type.ToString() : "", subject = about.IsString() ? about.ToString() : "";
+		bool large = kind == "item" || kind == "weapon" || (kind == "super_help" && (subject.rfind("rune|", 0) == 0 || subject.rfind("ultimatum|", 0) == 0));
+		g_OnlyHovered = ToNumber(shown) != 0 && large;
 		g_MouseX = ToNumber(g_Yytk->CallBuiltin("device_mouse_x_to_gui", { RValue(0.0) })) - g_MenuX;
 		g_MouseY = ToNumber(g_Yytk->CallBuiltin("device_mouse_y_to_gui", { RValue(0.0) })) - g_MenuY;
 		MarkAttributes(Self, build);
