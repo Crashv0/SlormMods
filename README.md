@@ -4,19 +4,16 @@ A collection of mods for The Slormancer, bundled into one. Each mod is off until
 
 ## Mods
 
-### Auto enter Temppopotamus' Bastion
+### Macros
 
-On the Mods tab. Walking up to the Mage Academy entrance starts the Bastion without the menu.
+On the Macros tab. Presses skills for the hero by rules; the game still applies its own cost, cooldown and animation checks.
 
-- **Auto exit** takes the exit key and the portal when you reach them; holding a key (Left Ctrl) keeps you in to pick up loot.
-- **Skip the result screen** closes it as soon as the game allows.
-
-### Auto open chests
-
-On the Mods tab. Uses a chest when the hero is close enough to do it by hand.
-
-- **Chests** on expeditions are opened, then searched.
-- **War Chest** in the Great Forge is opened and emptied, once per visit.
+- **Priority.** Macros are tried from the top, and a higher one that can start takes over from a lower one.
+- **Trigger.** Automatic, while a key is held, or switched by a key, with an option for standing still or moving and a wait between uses.
+- **Conditions.** A tree of all of / any of / none of over life, mana, cooldowns, casting, in combat, enemies within a range and time since the macro fired, each with its live value.
+- **Steps.** Press a skill or aura (tap or hold), wait, or wait until conditions hold.
+- **Pause key.** F5 pauses and resumes every macro. Nothing is pressed in town or in a menu.
+- **Save and share.** Saved by name, and exported or imported as one line of text.
 
 ### Auto pick Great Forge paths
 
@@ -38,6 +35,20 @@ On the ESP tab. Marks every open breach on the map.
 - **Nearest breach.** An arrow by the hero pointing at it.
 - **Hide key.** F8 shows or hides every drawing.
 - **Reveal map.** The minimap and the large map show the whole map and its icons from the start of a floor. It has its own switch and works with the drawings off.
+
+### Auto open chests
+
+On the Mods tab. Uses a chest when the hero is close enough to do it by hand.
+
+- **Chests** on expeditions are opened, then searched.
+- **War Chest** in the Great Forge is opened and emptied, once per visit.
+
+### Auto enter Temppopotamus' Bastion
+
+On the Mods tab. Walking up to the Mage Academy entrance starts the Bastion without the menu.
+
+- **Auto exit** takes the exit key and the portal when you reach them; holding a key (Left Ctrl) keeps you in to pick up loot.
+- **Skip the result screen** closes it as soon as the game allows.
 
 ## Build
 

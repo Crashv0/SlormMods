@@ -36,5 +36,5 @@ FILES IN THIS ZIP
   mods\licenses\                   licenses and sources of the above
 
 Created while playing: aurie.log, and in mods\Aurie the files
-SlormSuite.txt (your settings), SlormSuite.layout.ini and the folder
-SlormSuite.forge (Great Forge lists you saved).
+SlormSuite.txt (your settings), SlormSuite.layout.ini and the folders
+SlormSuite.forge and SlormSuite.macros (lists and macros you saved).
