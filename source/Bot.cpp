@@ -1,0 +1,1076 @@
+// Plays a floor of an expedition. Walks to the nearest open breach, fights what comes out until it
+// closes, picks up what drops, and takes the door once it can be had.
+#include "Suite.hpp"
+#include "ReaperNames.hpp"
+#include <imgui.h>
+#include <deque>
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <map>
+#include <queue>
+using namespace Aurie;
+using namespace YYTK;
+
+namespace
+{
+	// Enemies this near are fought before anything else, and hit from this near.
+	constexpr double NOTICE = 170, HIT = 110;
+	// Enemies this near an open breach are gone to as well.
+	constexpr double AROUND = 300;
+	// Near enough to an enemy to stop walking at it.
+	constexpr double CLOSE = 30;
+	// A breach this little out of the way, on foot, is done in passing.
+	constexpr float ON_THE_WAY = 260;
+	// Standing on a breach counts from this near.
+	constexpr double ON_BREACH = 28;
+	// The door can be had once all but this many breaches are closed.
+	constexpr int SPARE = 5;
+	constexpr ULONGLONG ACT_MS = 700, GIVE_UP_MS = 120000, SKIP_MS = 45000;
+
+	// What the hero has picked up, newest last; the same thing again is counted on its line.
+	enum LootKind { LOOT_STUFF, LOOT_GEAR, LOOT_REAPER };
+	struct LootLine
+	{
+		std::string text;
+		int kind = LOOT_STUFF;
+		int count = 1;
+	};
+
+	struct Farm
+	{
+		// Plays the floor: breach after breach, then the door. Never saved.
+		bool on = false;
+		int key = VK_HOME;
+		// The game's click to move option is off; read each step.
+		bool no_ctm = false;
+		std::string status = "off";
+		// With the door to be had, breaches within this of the hero are still done first.
+		float extra = 500;
+		// Chaos breaches are left alone.
+		bool skip_chaos = true;
+		// Loot lying within this of the hero, on foot, is walked to and picked up between breaches.
+		bool loot = true;
+		float loot_range = 450;
+		// A reaper picked up is unlocked at once, as the game does on a click.
+		bool reaper = true;
+		// Holds the primary skill on enemies; off for a hero whose skills fire by themselves.
+		bool attack = false;
+		std::deque<LootLine> loot_log;
+		// What the loot log lists: reapers, gear, fragments, slormites, slormelines, slormandrites, the rest.
+		bool loot_show[7] = { true, true, false, false, true, true, true };
+		// How many things have been picked up.
+		int loot_count = 0;
+	} g_Farm;
+	Feature* g_Mod = nullptr;
+
+	struct Place { double x = 0, y = 0; };
+	struct Breach
+	{
+		Place at;
+		// Not done yet: the breach is still in the room.
+		bool open = false;
+		RValue it;
+		// Stepped on, its enemies out; the game shuts the hero in with them until it is done.
+		bool active = false;
+		// A chaos breach, ESP's "Breach V".
+		bool chaos = false;
+	};
+
+	bool g_Has = false;
+	// The hero has stood on the breach being worked on.
+	bool g_Reached = false;
+	Place g_Breach;
+	ULONGLONG g_Since = 0, g_ActAt = 0, g_QuietAt = 0;
+	bool g_Walking = false;
+	int g_Fails = 0, g_Closed = -1;
+	std::map<long long, ULONGLONG> g_Skip;
+	bool g_Attack = false;
+	Place g_AttackAt;
+	std::string g_Said;
+
+	long long Key(const Place& At) { return static_cast<long long>(At.x) * 100000 + static_cast<long long>(At.y); }
+	double Far(const Place& A, const Place& B) { return hypot(A.x - B.x, A.y - B.y); }
+
+	// The status line, logged when it changes.
+	void Say(const std::string& Text)
+	{
+		g_Farm.status = Text;
+		if (Text != g_Said)
+			Log("bot: %s", Text.c_str());
+		g_Said = Text;
+	}
+
+	std::vector<Breach> Breaches()
+	{
+		std::vector<Breach> out;
+		CInstance* level = FindInstance("obj_procedural");
+		RValue list = level ? Local(level, "breach_array_coords") : RValue();
+		if (!list.IsArray())
+			return out;
+		// The breaches still in the room, by where they are.
+		std::map<long long, RValue> there;
+		RValue object = g_Yytk->CallBuiltin("asset_get_index", { RValue("obj_breach") });
+		int count = static_cast<int>(ToNumber(g_Yytk->CallBuiltin("instance_number", { object })));
+		for (int i = 0; i < count; i++)
+		{
+			RValue instance = g_Yytk->CallBuiltin("instance_find", { object, RValue(static_cast<double>(i)) });
+			there[Key({ ToNumber(g_Yytk->CallBuiltin("variable_instance_get", { instance, RValue("x") })), ToNumber(g_Yytk->CallBuiltin("variable_instance_get", { instance, RValue("y") })) })] = instance;
+		}
+		for (const RValue& entry : list.ToVector())
+		{
+			if (!entry.IsArray())
+				continue;
+			std::vector<RValue> parts = entry.ToVector();
+			if (parts.size() < 3)
+				continue;
+			// The third is the breach, or -1 from when it is stepped on; it stays in the room until it is done.
+			Breach breach;
+			breach.at = { ToNumber(parts[0]), ToNumber(parts[1]) };
+			auto found = there.find(Key(breach.at));
+			breach.open = found != there.end();
+			if (breach.open)
+			{
+				breach.it = found->second;
+				breach.active = !(parts[2].m_Kind == VALUE_REF || ToNumber(parts[2]) > 0);
+				breach.chaos = ToNumber(g_Yytk->CallBuiltin("variable_instance_get", { breach.it, RValue("breach_outpost") })) > 0;
+			}
+			out.push_back(breach);
+		}
+		return out;
+	}
+
+	// The living enemies, nearest first. Townsfolk have no life and are left out.
+	std::vector<Place> Enemies(CInstance* Hero, const Place& Me)
+	{
+		std::vector<Place> out;
+		RValue parent = g_Yytk->CallBuiltin("asset_get_index", { RValue("obj_parent_lifeform") });
+		double me = Local(Hero, "id").ToDouble();
+		int count = static_cast<int>(ToNumber(g_Yytk->CallBuiltin("instance_number", { parent })));
+		for (int i = 0; i < count; i++)
+		{
+			RValue other = g_Yytk->CallBuiltin("instance_find", { parent, RValue(static_cast<double>(i)) });
+			auto of = [&](const char* Name) { return ToNumber(g_Yytk->CallBuiltin("variable_instance_get", { other, RValue(Name) })); };
+			if (g_Yytk->CallBuiltin("variable_instance_get", { other, RValue("id") }).ToDouble() == me || of("dead_since") > 0 || of("the_health") <= 0)
+				continue;
+			out.push_back({ of("x"), of("y") });
+		}
+		std::sort(out.begin(), out.end(), [&](const Place& A, const Place& B) { return Far(A, Me) < Far(B, Me); });
+		return out;
+	}
+
+	// The nearest instance of an object to a place; false when the room has none.
+	bool Nearest(const char* Object, const Place& To, Place& Found)
+	{
+		RValue object = g_Yytk->CallBuiltin("asset_get_index", { RValue(Object) });
+		int count = static_cast<int>(ToNumber(g_Yytk->CallBuiltin("instance_number", { object })));
+		for (int i = 0; i < count; i++)
+		{
+			RValue instance = g_Yytk->CallBuiltin("instance_find", { object, RValue(static_cast<double>(i)) });
+			Place at = { ToNumber(g_Yytk->CallBuiltin("variable_instance_get", { instance, RValue("x") })), ToNumber(g_Yytk->CallBuiltin("variable_instance_get", { instance, RValue("y") })) };
+			if (i == 0 || Far(at, To) < Far(Found, To))
+				Found = at;
+		}
+		return count > 0;
+	}
+
+	bool Busy()
+	{
+		int state = WalkStatus().state;
+		return state == WALK_STARTING || state == WALK_WALKING;
+	}
+
+	// A walk asked for now, unless one is on its way or one was asked for a moment ago.
+	bool Go(const Place& To, ULONGLONG Now, double Reach = 24)
+	{
+		if (Busy() || Now - g_ActAt < ACT_MS)
+			return false;
+		g_ActAt = Now;
+		WalkTo(To.x, To.y, false, Reach);
+		return true;
+	}
+
+	// The game is told the mouse is on a place until then.
+	ULONGLONG g_HoverUntil = 0;
+	Place g_Hover;
+
+	// The door, or what is left of a breach to open the door with. The game offers either ("Open a
+	// Portal") while the mouse is on it, and a click then walks the hero up and uses it; the mouse has
+	// to stay there. So the hero is stood below, the mouse is put on it and kept there, and once the
+	// game offers it, it is clicked. Where on it the mouse has to be is tried out.
+	// On the door the mouse stays above the middle: there it is the next floor, below it the way home.
+	void Exit(CInstance* Self, const Place& At, bool Door, const Place& Me, ULONGLONG Now)
+	{
+		static constexpr double RESIDUE[] = { 8, 16, 0, 24 }, DOOR[] = { -8, -12, -5, -16 };
+		const double* TRIES = Door ? DOOR : RESIDUE;
+		static long long key = 0;
+		static ULONGLONG staged_at = 0, tried_at = 0, clicked_at = 0;
+		static int tried = 0;
+		static std::string said;
+		// Once below it, the hero is left to walk up for a while before it is stood below again.
+		long long this_key = Key(At) * 2 + (Door ? 1 : 0);
+		bool staged = key == this_key && Now - staged_at < 8000;
+		if (!staged)
+		{
+			if (!(Me.y > At.y + 6 && fabs(Me.x - At.x) < 28 && Far(Me, At) < 60))
+			{
+				// A walk ends some 17 above where it was clicked.
+				Go({ At.x, At.y + 50 }, Now);
+				return;
+			}
+			key = this_key;
+			staged_at = tried_at = Now;
+			clicked_at = 0;
+			tried = 0;
+		}
+		std::string offer = ToText(Local(Self, "activable_value"));
+		if (offer.empty() && Now - tried_at > 1200)
+		{
+			tried = (tried + 1) % 4;
+			tried_at = Now;
+		}
+		g_Hover = { At.x, At.y + TRIES[tried] };
+		g_HoverUntil = Now + 700;
+		if (offer != said)
+			Log("bot: the game offers \"%s\" with the mouse %+.0f from it, the hero at %.0f %.0f", offer.c_str(), TRIES[tried], Me.x, Me.y);
+		said = offer;
+		if (offer.empty() || Now - tried_at < 250 || Now - clicked_at < 1500 || Busy())
+			return;
+		clicked_at = Now;
+		WalkTo(g_Hover.x, g_Hover.y, false, 0);
+	}
+
+	// The level's floor, a cell set where the hero can walk; read once a floor.
+	struct Floor
+	{
+		int width = 0, height = 0;
+		double cell = 16;
+		std::vector<char> open;
+	};
+	Floor g_Floor;
+	constexpr float NO_WAY = 1e9f;
+
+	void ReadFloor(CInstance* Self)
+	{
+		g_Floor = Floor();
+		RValue grid = Local(Self, "grid_minimap");
+		// 5 is GML's ds_type_grid.
+		if (grid.m_Kind == VALUE_UNDEFINED || grid.m_Kind == VALUE_UNSET || ToNumber(g_Yytk->CallBuiltin("ds_exists", { grid, RValue(5.0) })) < 1)
+			return;
+		int width = static_cast<int>(ToNumber(g_Yytk->CallBuiltin("ds_grid_width", { grid }))), height = static_cast<int>(ToNumber(g_Yytk->CallBuiltin("ds_grid_height", { grid })));
+		RValue room_width;
+		if (width < 1 || height < 1 || width > 600 || height > 600 || !AurieSuccess(g_Yytk->GetBuiltin("room_width", nullptr, NULL_INDEX, room_width)))
+			return;
+		g_Floor.width = width;
+		g_Floor.height = height;
+		g_Floor.cell = ToNumber(room_width) / width;
+		g_Floor.open.resize(static_cast<size_t>(width) * height);
+		// Floor is 1 before it is seen and 100 after; walls are the same below zero.
+		for (int down = 0; down < height; down++)
+			for (int across = 0; across < width; across++)
+				g_Floor.open[down * width + across] = ToNumber(g_Yytk->CallBuiltin("ds_grid_get", { grid, RValue(static_cast<double>(across)), RValue(static_cast<double>(down)) })) > 0;
+		Log("bot: floor read, %d x %d cells of %.0f", width, height, g_Floor.cell);
+	}
+
+	// The floor cell a place is in, or the nearest one within a few cells; -1 for none.
+	int Cell(const Place& At)
+	{
+		if (g_Floor.width < 1 || g_Floor.cell <= 0)
+			return -1;
+		int across = static_cast<int>(At.x / g_Floor.cell), down = static_cast<int>(At.y / g_Floor.cell), best = -1;
+		double best_far = 0;
+		for (int dy = -3; dy <= 3; dy++)
+			for (int dx = -3; dx <= 3; dx++)
+			{
+				int x = across + dx, y = down + dy;
+				if (x < 0 || y < 0 || x >= g_Floor.width || y >= g_Floor.height || !g_Floor.open[y * g_Floor.width + x])
+					continue;
+				double dist = hypot(dx, dy);
+				if (best < 0 || dist < best_far)
+				{
+					best = y * g_Floor.width + x;
+					best_far = dist;
+				}
+			}
+		return best;
+	}
+
+	// How far it is on foot from a place to every cell of the floor, in the room's units.
+	std::vector<float> Walked(const Place& From)
+	{
+		std::vector<float> dist(g_Floor.open.size(), NO_WAY);
+		int start = Cell(From);
+		if (start < 0)
+			return dist;
+		std::priority_queue<std::pair<float, int>, std::vector<std::pair<float, int>>, std::greater<>> next;
+		dist[start] = 0;
+		next.push({ 0.0f, start });
+		int width = g_Floor.width, height = g_Floor.height;
+		float step = static_cast<float>(g_Floor.cell);
+		while (!next.empty())
+		{
+			auto [so_far, at] = next.top();
+			next.pop();
+			if (so_far > dist[at])
+				continue;
+			int x = at % width, y = at / width;
+			for (int dy = -1; dy <= 1; dy++)
+				for (int dx = -1; dx <= 1; dx++)
+				{
+					int nx = x + dx, ny = y + dy;
+					if ((!dx && !dy) || nx < 0 || ny < 0 || nx >= width || ny >= height || !g_Floor.open[ny * width + nx])
+						continue;
+					// No cutting a corner of a wall.
+					if (dx && dy && (!g_Floor.open[y * width + nx] || !g_Floor.open[ny * width + x]))
+						continue;
+					float to = so_far + step * (dx && dy ? 1.41421f : 1.0f);
+					if (to < dist[ny * width + nx])
+					{
+						dist[ny * width + nx] = to;
+						next.push({ to, ny * width + nx });
+					}
+				}
+		}
+		return dist;
+	}
+
+	// How far it is on foot from each breach, kept for the floor: breaches do not move.
+	std::map<long long, std::vector<float>> g_From;
+
+	// The breach to do next and how far it is on foot: the first of the shortest round found through
+	// as many breaches as the door still needs, with those that lie close to that round added to it.
+	const Breach* Next(const std::vector<const Breach*>& Among, const Place& Me, int Needs, double& Away)
+	{
+		Away = 0;
+		if (Among.empty())
+			return nullptr;
+		size_t count = Among.size();
+		// Without the floor, as the crow flies.
+		bool floor = g_Floor.width > 0 && Cell(Me) >= 0;
+		std::vector<std::vector<float>> dist(count + 1, std::vector<float>(count, NO_WAY));
+		for (size_t from = 0; from <= count; from++)
+		{
+			Place at = from ? Among[from - 1]->at : Me;
+			std::vector<float> here;
+			const std::vector<float>* walked = nullptr;
+			if (floor && from)
+			{
+				auto kept = g_From.find(Key(at));
+				if (kept == g_From.end())
+					kept = g_From.emplace(Key(at), Walked(at)).first;
+				walked = &kept->second;
+			}
+			else if (floor)
+			{
+				here = Walked(at);
+				walked = &here;
+			}
+			for (size_t to = 0; to < count; to++)
+			{
+				int cell = floor ? Cell(Among[to]->at) : -1;
+				dist[from][to] = !floor ? static_cast<float>(Far(at, Among[to]->at)) : cell < 0 ? NO_WAY : (*walked)[cell];
+			}
+		}
+		// Nearest first, each from the one before.
+		std::vector<int> order, rest;
+		for (size_t i = 0; i < count; i++)
+			if (dist[0][i] < NO_WAY) rest.push_back(static_cast<int>(i));
+		if (rest.empty())
+			return nullptr;
+		size_t many = (std::min)(static_cast<size_t>((std::max)(Needs, 1)), rest.size());
+		int at = -1;
+		while (order.size() < many)
+		{
+			auto best = std::min_element(rest.begin(), rest.end(), [&](int A, int B) { return dist[at + 1][A] < dist[at + 1][B]; });
+			at = *best;
+			order.push_back(at);
+			rest.erase(best);
+		}
+		auto length = [&](const std::vector<int>& Of)
+		{
+			float sum = dist[0][Of[0]];
+			for (size_t i = 1; i < Of.size(); i++) sum += dist[Of[i - 1] + 1][Of[i]];
+			return sum;
+		};
+		// What a breach adds to the round when put in before the one at a place in it, or after the last.
+		auto adds = [&](const std::vector<int>& Of, int Breach, size_t Before)
+		{
+			int before = Before ? Of[Before - 1] + 1 : 0;
+			if (Before >= Of.size())
+				return dist[before][Breach];
+			return dist[before][Breach] + dist[Breach + 1][Of[Before]] - dist[before][Of[Before]];
+		};
+		// Made shorter while it can be: a stretch walked the other way round, a breach moved to another
+		// place in the round, or one taken out and one left out put in where it fits best.
+		float now = length(order);
+		for (int round = 0; round < 200 && many > 1; round++)
+		{
+			bool better = false;
+			auto take = [&](const std::vector<int>& Tried)
+			{
+				float tried = length(Tried);
+				if (tried + 0.5f >= now)
+					return false;
+				order = Tried;
+				now = tried;
+				return better = true;
+			};
+			for (size_t i = 0; i < many && !better; i++)
+				for (size_t j = i + 1; j < many && !better; j++)
+				{
+					std::vector<int> tried = order;
+					std::reverse(tried.begin() + i, tried.begin() + j + 1);
+					take(tried);
+				}
+			for (size_t i = 0; i < many && !better; i++)
+				for (size_t j = 0; j < many && !better; j++)
+				{
+					if (i == j)
+						continue;
+					std::vector<int> tried = order;
+					int moved = tried[i];
+					tried.erase(tried.begin() + i);
+					tried.insert(tried.begin() + j, moved);
+					take(tried);
+				}
+			for (size_t i = 0; i < many && !better; i++)
+				for (size_t j = 0; j < rest.size() && !better; j++)
+					for (size_t k = 0; k < many && !better; k++)
+					{
+						std::vector<int> tried = order;
+						int out = tried[i];
+						tried.erase(tried.begin() + i);
+						tried.insert(tried.begin() + k, rest[j]);
+						if (take(tried))
+							rest[j] = out;
+					}
+			if (!better)
+				break;
+		}
+		// A breach the round passes close by is done in passing, where it adds the least.
+		int passing = 0;
+		while (!rest.empty())
+		{
+			float least = NO_WAY;
+			size_t which = 0, where = 0;
+			for (size_t j = 0; j < rest.size(); j++)
+				for (size_t k = 0; k < order.size(); k++)
+				{
+					float more = adds(order, rest[j], k);
+					if (more < least) { least = more; which = j; where = k; }
+				}
+			if (least > ON_THE_WAY)
+				break;
+			order.insert(order.begin() + where, rest[which]);
+			rest.erase(rest.begin() + which);
+			passing++;
+		}
+		now = length(order);
+		static std::string said;
+		std::string route;
+		char text[48];
+		for (int index : order)
+		{
+			snprintf(text, sizeof(text), " %.0f,%.0f", Among[index]->at.x, Among[index]->at.y);
+			route += text;
+		}
+		if (route != said)
+			Log("bot: route %s%s, %.0f on foot, %d of them in passing, first is %.0f away", floor ? "" : "(no floor read) ", route.c_str(), now, passing, dist[0][order[0]]);
+		said = route;
+		Away = dist[0][order[0]];
+		return Among[order[0]];
+	}
+
+	// Loot on the ground: walked to, then picked up with the game's own key, pressed on the hero.
+	std::map<double, ULONGLONG> g_NoLoot;
+	double g_Loot = 0;
+	Place g_LootAt;
+	ULONGLONG g_LootSince = 0, g_LootNearAt = 0, g_LootPlanned = 0, g_PickUntil = 0;
+	constexpr double PICK = 44;
+
+	// What a thing on the ground is, the first few times one is seen: its numbers and texts.
+	void Describe(const RValue& Instance, double Id)
+	{
+		static std::map<double, bool> seen;
+		if (seen.size() >= 12 || !seen.emplace(Id, true).second)
+			return;
+		std::string all;
+		RValue names = g_Yytk->CallBuiltin("variable_instance_get_names", { Instance });
+		if (names.IsArray())
+			for (const RValue& name : names.ToVector())
+			{
+				RValue value = g_Yytk->CallBuiltin("variable_instance_get", { Instance, name });
+				if (value.m_Kind == VALUE_ARRAY || value.m_Kind == VALUE_OBJECT || value.m_Kind == VALUE_UNDEFINED || value.m_Kind == VALUE_UNSET)
+					continue;
+				all += (all.empty() ? "" : ", ") + ToText(name) + " " + ToText(value);
+			}
+		for (size_t from = 0; from < all.size(); from += 800)
+			Log("bot: loot %.0f: %s", Id, all.substr(from, 800).c_str());
+	}
+
+	// True while loot is being seen to; the breaches wait.
+	bool Loot(const Place& Me, ULONGLONG Now)
+	{
+		if (!g_Farm.loot)
+			return false;
+		RValue object = g_Yytk->CallBuiltin("asset_get_index", { RValue("obj_loot") });
+		int count = static_cast<int>(ToNumber(g_Yytk->CallBuiltin("instance_number", { object })));
+		if (count < 1)
+		{
+			g_Loot = 0;
+			return false;
+		}
+		// The one being seen to, while it lies there; a new one is looked for now and then.
+		bool there = false;
+		std::vector<std::pair<double, Place>> lying;
+		for (int i = 0; i < count; i++)
+		{
+			RValue instance = g_Yytk->CallBuiltin("instance_find", { object, RValue(static_cast<double>(i)) });
+			double id = g_Yytk->CallBuiltin("variable_instance_get", { instance, RValue("id") }).ToDouble();
+			Place at = { ToNumber(g_Yytk->CallBuiltin("variable_instance_get", { instance, RValue("x") })), ToNumber(g_Yytk->CallBuiltin("variable_instance_get", { instance, RValue("y") })) };
+			Describe(instance, id);
+			if (id == g_Loot)
+			{
+				there = true;
+				g_LootAt = at;
+			}
+			if (g_NoLoot.find(id) == g_NoLoot.end())
+				lying.push_back({ id, at });
+		}
+		if (g_Loot && !there)
+		{
+			Log("bot: loot %.0f picked up after %.1f s", g_Loot, (Now - g_LootSince) / 1000.0);
+			g_Loot = 0;
+		}
+		if (!g_Loot)
+		{
+			if (lying.empty() || Now - g_LootPlanned < 400)
+				return false;
+			g_LootPlanned = Now;
+			bool floor = g_Floor.width > 0 && Cell(Me) >= 0;
+			std::vector<float> walked = floor ? Walked(Me) : std::vector<float>();
+			float best = static_cast<float>(g_Farm.loot_range);
+			for (const auto& [id, at] : lying)
+			{
+				int cell = floor ? Cell(at) : -1;
+				float away = !floor ? static_cast<float>(Far(Me, at)) : cell < 0 ? NO_WAY : walked[cell];
+				if (away <= best)
+				{
+					best = away;
+					g_Loot = id;
+					g_LootAt = at;
+				}
+			}
+			if (!g_Loot)
+				return false;
+			g_LootSince = Now;
+			g_LootNearAt = 0;
+			Log("bot: loot %.0f at %.0f %.0f, %.0f away on foot, %d lying", g_Loot, g_LootAt.x, g_LootAt.y, best, static_cast<int>(lying.size()));
+		}
+		Say("picking up loot");
+		bool beside = Far(Me, g_LootAt) <= PICK;
+		if (beside && !g_LootNearAt)
+			g_LootNearAt = Now;
+		// Not picked up from beside it, or not got to: left where it lies for this floor.
+		if ((g_LootNearAt && Now - g_LootNearAt > 3000) || Now - g_LootSince > 12000)
+		{
+			Log("bot: loot %.0f at %.0f %.0f left, %s", g_Loot, g_LootAt.x, g_LootAt.y, g_LootNearAt ? "it would not be picked up" : "it could not be got to");
+			g_NoLoot[g_Loot] = Now;
+			g_Loot = 0;
+			if (Busy()) WalkStop();
+			return false;
+		}
+		if (beside)
+			g_PickUntil = Now + 150;
+		else
+		{
+			// A walk to somewhere else is given up first. A walk ends above where it was clicked.
+			if (Busy() && Far({ WalkStatus().x, WalkStatus().y }, { g_LootAt.x, g_LootAt.y + 14 }) > 4)
+				WalkStop();
+			Go({ g_LootAt.x, g_LootAt.y + 14 }, Now, 20);
+		}
+		return true;
+	}
+
+	void Rest()
+	{
+		g_Has = false;
+		g_Reached = false;
+		g_Walking = false;
+		g_Attack = false;
+		g_Fails = 0;
+	}
+}
+
+static ULONGLONG g_UnlockedAt = 0;
+static int g_Clicks = 0;
+
+// The reaper just picked up, -1 for none, and when.
+static double g_Reaper = -1;
+static ULONGLONG g_ReaperAt = 0;
+
+// What is picked up comes as a list whose first entry says what it is: a reaper is { rarity, which, "", "weapon", ... }.
+static void Picked(const RValue& Item)
+{
+	if (!Item.IsArray())
+		return;
+	std::vector<RValue> parts = Item.ToVector();
+	if (parts.empty() || !parts[0].IsArray())
+		return;
+	std::vector<RValue> head = parts[0].ToVector();
+	if (head.size() < 4 || head[3].m_Kind != VALUE_STRING)
+		return;
+	// The log: gear by its rarity and slot, the rest by what it is.
+	std::string what = ToText(head[3]);
+	LootLine line;
+	char text[96];
+	if (what == "weapon")
+	{
+		// Named after the hero's weapon.
+		int which = static_cast<int>(ToNumber(head[1]));
+		CInstance* hero = FindInstance("obj_parent_hero");
+		std::string kind = hero ? ToText(g_Yytk->CallBuiltin("object_get_name", { Local(hero, "object_index") })) : "";
+		const char* weapon = kind == "obj_hero_huntress" ? "Bow" : kind == "obj_hero_mage" ? "Staff" : "Sword";
+		std::string name = which >= 0 && which < static_cast<int>(std::size(REAPER_NAMES)) ? REAPER_NAMES[which] : "";
+		size_t at = name.find('$');
+		if (at != std::string::npos)
+			name.replace(at, 1, weapon);
+		snprintf(text, sizeof(text), "Reaper #%d", which);
+		line = { name.empty() ? std::string(text) : name, LOOT_REAPER };
+		Log("bot: reaper %d is %s (hero %s)", which, line.text.c_str(), kind.c_str());
+	}
+	else if (what == "equipment")
+		line = { ToText(head[0]) + " " + ToText(head[1]), LOOT_GEAR };
+	else
+		line = { what, LOOT_STUFF };
+	if (!line.text.empty())
+		line.text[0] = static_cast<char>(toupper(static_cast<unsigned char>(line.text[0])));
+	static const char* const SHOWN[] = { "weapon", "equipment", "fragment", "slormite", "slormeline", "slormandrite" };
+	int shown = 6;
+	for (int i = 0; i < 6; i++)
+		if (what == SHOWN[i]) shown = i;
+	if (g_Farm.loot_show[shown])
+	{
+		std::lock_guard guard(g_Lock);
+		std::deque<LootLine>& log = g_Farm.loot_log;
+		g_Farm.loot_count++;
+		if (!log.empty() && log.back().text == line.text && line.kind != LOOT_REAPER)
+			log.back().count++;
+		else
+			log.push_back(line);
+		if (log.size() > 60)
+			log.pop_front();
+	}
+	if (what != "weapon")
+		return;
+	g_Reaper = ToNumber(head[1]);
+	g_ReaperAt = GetTickCount64();
+	Log("bot: reaper %.0f picked up", g_Reaper);
+}
+
+// The hero is walked by the game's click to move, an option of the game that can be off.
+static bool NoClickToMove()
+{
+	RValue on = Global("ctm");
+	return on.m_Kind != VALUE_UNDEFINED && on.m_Kind != VALUE_UNSET && ToNumber(on) < 1;
+}
+
+static PFUNC_YYGMLScript g_PickUp = nullptr;
+static RValue& PickUpHook(CInstance* Self, CInstance* Other, RValue& Result, int ArgumentCount, RValue** Arguments)
+{
+	RValue& result = g_PickUp(Self, Other, Result, ArgumentCount, Arguments);
+	if (g_Mod && g_Mod->enabled && ArgumentCount > 0 && Arguments[0])
+		Picked(*Arguments[0]);
+	return result;
+}
+
+static void BotTick(CInstance* Self)
+{
+	// The game unlocks a new reaper on a click, with this call; it is made a moment after the pick up.
+	if (g_Reaper >= 0 && GetTickCount64() - g_ReaperAt > 600)
+	{
+		double reaper = g_Reaper;
+		g_Reaper = -1;
+		PFUNC_YYGMLScript unlock = g_Farm.reaper ? FindScript("scr_weapon_pre_evolve") : nullptr;
+		if (unlock)
+		{
+			CallScript(unlock, Self, { RValue(reaper), RValue(1.0) });
+			Log("bot: reaper %.0f unlocked with scr_weapon_pre_evolve(%.0f, 1)", reaper, reaper);
+			g_UnlockedAt = GetTickCount64();
+			g_Clicks = 0;
+		}
+	}
+	// What the unlock shows is sent away with a click on the middle of the screen, where the hero stands.
+	// It takes one within a few seconds, so it is clicked twice.
+	if (g_UnlockedAt)
+	{
+		ULONGLONG since = GetTickCount64() - g_UnlockedAt;
+		static const ULONGLONG AT[] = { 1500, 3500 };
+		if (g_Clicks < 4 && since >= AT[g_Clicks / 2] + (g_Clicks % 2 ? 80 : 0))
+		{
+			OverlayClick(0.5f, 0.45f, g_Clicks % 2 == 0);
+			if (g_Clicks % 2)
+				OverlayReturnCursor();
+			Log("bot: click %s to send the reaper screen away, %.1f s after the unlock", g_Clicks % 2 ? "released" : "pressed", since / 1000.0);
+			g_Clicks++;
+		}
+		if (g_Clicks >= 4)
+			g_UnlockedAt = 0;
+	}
+	static bool was_on = false, key_was_down = false;
+	bool key_down = !g_SuppressToggle && (GetAsyncKeyState(g_Farm.key) & 0x8000) != 0;
+	if (key_down && !key_was_down)
+		g_Farm.on = !g_Farm.on;
+	key_was_down = key_down;
+	if (!g_Farm.on)
+	{
+		if (was_on)
+		{
+			if (Busy()) WalkStop();
+			Rest();
+			g_Closed = -1;
+			g_Floor = Floor(), g_From.clear();
+			g_Skip.clear();
+			g_NoLoot.clear();
+			g_Loot = 0;
+			Say("off");
+		}
+		was_on = false;
+		return;
+	}
+	was_on = true;
+	CInstance* hero = FindInstance("obj_parent_hero");
+	if (!hero || RoomName() != "rm_procedural")
+	{
+		Rest();
+		g_Closed = -1;
+		g_Floor = Floor(), g_From.clear();
+		return Say("waiting for an expedition");
+	}
+	if (g_Farm.no_ctm)
+	{
+		if (Busy()) WalkStop();
+		Rest();
+		return Say("needs Click to Move turned on in the game's options");
+	}
+	std::string state = ToText(Local(hero, "actual_state"));
+	if (state == "dead")
+	{
+		g_Farm.on = false;
+		return Say("the hero died");
+	}
+	// A floor being made or left.
+	if (ToNumber(Local(hero, "enable_input")) < 1)
+	{
+		Rest();
+		g_Closed = -1;
+		g_Floor = Floor(), g_From.clear();
+		g_Skip.clear();
+		g_NoLoot.clear();
+		g_Loot = 0;
+		return;
+	}
+	ULONGLONG now = GetTickCount64();
+	Place me = { ToNumber(Local(hero, "x")), ToNumber(Local(hero, "y")) };
+	std::vector<Breach> breaches = Breaches();
+	int total = static_cast<int>(breaches.size()), closed = 0;
+	for (const Breach& breach : breaches) closed += breach.open ? 0 : 1;
+	int needed = (std::max)(total - SPARE, 1);
+	if (closed != g_Closed)
+	{
+		Log("bot: %d of %d breaches closed, the door needs %d", closed, total, needed);
+		if (g_Closed < 0)
+		{
+			std::string all;
+			char place[48];
+			for (const Breach& breach : breaches)
+			{
+				snprintf(place, sizeof(place), " %.0f,%.0f%s", breach.at.x, breach.at.y, !breach.open ? "(closed)" : breach.chaos ? "(V)" : "");
+				all += place;
+			}
+			Log("bot: breaches %s", all.c_str());
+		}
+		// What is there to open the door with, the first time it can be opened.
+		if (g_Closed >= 0 && g_Closed < needed && closed >= needed)
+		{
+#ifdef SLORM_DEV
+			g_Dev.dump_note = "door can be had";
+			g_Dev.want_dump = true;
+#endif
+		}
+		g_Closed = closed;
+	}
+
+	// Loot comes before the next breach and the door, but not while a breach is open on the hero.
+	bool shut_in = false;
+	for (const Breach& breach : breaches) shut_in = shut_in || (breach.open && breach.active);
+	if (!shut_in && !(g_Has && g_Reached) && Loot(me, now))
+	{
+		g_Walking = false;
+		g_Attack = false;
+		return;
+	}
+
+	char text[128];
+	// The door is clicked as soon as there is one.
+	Place exit;
+	if (Nearest("obj_breach_door", me, exit))
+	{
+		Rest();
+		snprintf(text, sizeof(text), "taking the door at %.0f %.0f", exit.x, exit.y);
+		Say(text);
+		Exit(Self, exit, true, me, now);
+		return;
+	}
+
+	// The breach being worked on, while it is open.
+	bool opened = false;
+	if (g_Has)
+	{
+		auto found = std::find_if(breaches.begin(), breaches.end(), [](const Breach& Of) { return Key(Of.at) == Key(g_Breach); });
+		if (found == breaches.end() || !found->open)
+			Rest();
+		else
+			opened = found->active;
+	}
+	if (g_Has && now - g_Since > GIVE_UP_MS)
+	{
+		Log("bot: the breach at %.0f %.0f took too long, left for later", g_Breach.x, g_Breach.y);
+		g_Skip[Key(g_Breach)] = now + SKIP_MS;
+		Rest();
+	}
+	if (!g_Has)
+	{
+		// Finding the way round takes a moment, so not every step.
+		static ULONGLONG planned = 0;
+		if (now - planned < 400)
+			return;
+		planned = now;
+		if (g_Floor.width < 1)
+			ReadFloor(Self);
+		// One already stepped on comes first: there is no leaving it.
+		const Breach* best = nullptr;
+		double away = 0;
+		for (const Breach& breach : breaches)
+			if (breach.open && breach.active)
+				best = &breach;
+		// Chaos breaches are passed over when asked, unless the door cannot be had without them.
+		for (int pass = 0; pass < 2 && !best; pass++)
+		{
+			if (pass == 1 && (!g_Farm.skip_chaos || closed >= needed))
+				break;
+			std::vector<const Breach*> among;
+			for (const Breach& breach : breaches)
+				if (breach.open && (pass == 1 || !g_Farm.skip_chaos || !breach.chaos) && g_Skip[Key(breach.at)] < now)
+					among.push_back(&breach);
+			best = Next(among, me, needed - closed, away);
+		}
+		// With the door to be had, a breach is only worth it when it is near on foot; the door opens
+		// by clicking what is left of a closed breach, the nearest of them.
+		if (closed >= needed && (!best || (!best->active && away > g_Farm.extra)) && Nearest("obj_breach_residue", me, exit))
+		{
+			g_Attack = false;
+			snprintf(text, sizeof(text), "opening the door at %.0f %.0f", exit.x, exit.y);
+			Say(text);
+			Exit(Self, exit, false, me, now);
+			return;
+		}
+		if (!best)
+			return Say(closed >= total ? "every breach is closed and there is no door" : "no breach can be reached for now");
+		g_Has = true;
+		g_Breach = best->at;
+		g_Since = g_QuietAt = now;
+	}
+
+	if (Far(g_Breach, me) <= ON_BREACH)
+		g_Reached = true;
+	// The breach is opened first; what stands by it is fought once it is open.
+	std::vector<Place> enemies = g_Reached || opened ? Enemies(hero, me) : std::vector<Place>();
+	if (!enemies.empty() && (Far(enemies[0], me) <= NOTICE || Far(enemies[0], g_Breach) <= AROUND))
+	{
+		g_Walking = false;
+		g_QuietAt = now;
+		g_AttackAt = enemies[0];
+		// A hero whose skills fire by themselves only has to be among the enemies.
+		g_Attack = g_Farm.attack && Far(enemies[0], me) <= HIT;
+		if (g_Attack && Busy())
+			WalkStop();
+		else if (!g_Attack && Far(enemies[0], me) > CLOSE)
+			Go(enemies[0], now);
+		snprintf(text, sizeof(text), "fighting by the breach at %.0f %.0f", g_Breach.x, g_Breach.y);
+		return Say(text);
+	}
+	g_Attack = false;
+	// A walk to the breach that failed: after two, the breach is left for later.
+	if (g_Walking && !Busy())
+	{
+		g_Walking = false;
+		if (WalkStatus().state == WALK_FAILED && ++g_Fails >= 2)
+		{
+			Log("bot: cannot walk to the breach at %.0f %.0f (%s), left for later", g_Breach.x, g_Breach.y, WalkStatus().why.c_str());
+			g_Skip[Key(g_Breach)] = now + SKIP_MS;
+			return Rest();
+		}
+	}
+	if (Far(g_Breach, me) > ON_BREACH)
+	{
+		if (Go(g_Breach, now))
+			g_Walking = true;
+		snprintf(text, sizeof(text), "walking to the breach at %.0f %.0f", g_Breach.x, g_Breach.y);
+		return Say(text);
+	}
+	// On the breach with nothing to fight: after a while, a step across it and back.
+	if (now - g_QuietAt > 6000)
+	{
+		g_QuietAt = now;
+		Go({ g_Breach.x + (me.x <= g_Breach.x ? 40 : -40), g_Breach.y }, now);
+	}
+	snprintf(text, sizeof(text), "waiting on the breach at %.0f %.0f", g_Breach.x, g_Breach.y);
+	Say(text);
+}
+
+// The attack: the game is told the mouse is on the enemy, and the primary skill is held.
+void BotInput(CInstance* Hero)
+{
+	if (!g_Farm.on)
+		return;
+	if (GetTickCount64() < g_HoverUntil)
+		AimAt(g_Hover.x, g_Hover.y, 100);
+	// The pick up key, tapped: a press each fifth of a second.
+	if (GetTickCount64() < g_PickUntil && GetTickCount64() % 200 < 100)
+		g_Yytk->CallBuiltin("variable_instance_set", { RValue(Hero), RValue("loot_key"), RValue(1.0) });
+	if (!g_Attack)
+		return;
+	if (AimStep(g_AttackAt.x, g_AttackAt.y))
+		g_Yytk->CallBuiltin("variable_instance_set", { RValue(Hero), RValue("attack_1_key"), RValue(1.0) });
+}
+
+namespace
+{
+	struct Farmer : Feature
+	{
+		Farmer() : Feature("Farmer", "farmer", "Plays expedition floors for the hero: closes breaches by the shortest way round, picks up what drops, unlocks reapers, then opens the portal and takes it to the next floor.")
+		{
+			tab = "Farmer";
+			g_Mod = this;
+		}
+
+		void Start() override
+		{
+			PFUNC_YYGMLScript pick_up = FindScript("scr_pick_up_item");
+			if (!pick_up || !AurieSuccess(MmCreateHook(g_ArSelfModule, "SlormSuite pick up", pick_up, PickUpHook, reinterpret_cast<PVOID*>(&g_PickUp))))
+				Log("farmer: no pick up script, reapers are not unlocked and nothing is listed");
+		}
+
+		void Tick(CInstance* Self) override
+		{
+			g_Farm.no_ctm = NoClickToMove();
+			BotTick(Self);
+		}
+
+		void Off(CInstance* Self) override
+		{
+			g_Farm.on = false;
+			BotTick(Self);
+		}
+
+		bool Draw() override
+		{
+			bool changed = false;
+			if (!ImGui::BeginTabBar("farmer"))
+				return false;
+			if (ImGui::BeginTabItem("Battlefield"))
+			{
+				ImGui::BeginDisabled(!enabled);
+				ImGui::Checkbox("Run the floor", &g_Farm.on);
+				ImGui::EndDisabled();
+				ImGui::SameLine();
+				changed |= KeyButton("run", &g_Farm.key);
+				ImGui::SameLine();
+				ImGui::TextDisabled("%s", g_Farm.status.c_str());
+				if (enabled && g_Farm.no_ctm)
+					ImGui::TextColored({ 1.0f, 0.45f, 0.35f, 1.0f }, "Click to Move is off in the game's options. The hero cannot be walked without it.");
+				ImGui::SeparatorText("Breaches");
+				changed |= ImGui::Checkbox("Skip Breach V", &g_Farm.skip_chaos);
+				ImGui::SetNextItemWidth(90);
+				changed |= ImGui::InputFloat("Once the portal can be opened, still do breaches within this", &g_Farm.extra, 0, 0, "%.0f");
+				ImGui::SeparatorText("Loot");
+				// Long lines wrap; the box never scrolls sideways.
+				if (ImGui::BeginChild("loot", { 0, 110 * g_Appearance.scale }, ImGuiChildFlags_Borders))
+				{
+					static int shown = 0;
+					for (const LootLine& line : g_Farm.loot_log)
+					{
+						std::string text = line.count > 1 ? line.text + " x" + std::to_string(line.count) : line.text;
+						if (line.kind == LOOT_REAPER)
+							ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.72f, 0.2f, 1.0f));
+						else if (line.kind == LOOT_STUFF)
+							ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+						ImGui::TextWrapped("%s", text.c_str());
+						if (line.kind != LOOT_GEAR)
+							ImGui::PopStyleColor();
+					}
+					if (g_Farm.loot_log.empty())
+						ImGui::TextDisabled("Nothing picked up yet.");
+					// Kept at the newest line as lines come in.
+					if (shown != g_Farm.loot_count)
+						ImGui::SetScrollHereY(1.0f);
+					shown = g_Farm.loot_count;
+				}
+				ImGui::EndChild();
+				if (!g_Farm.loot_log.empty() && ImGui::SmallButton("Clear"))
+					g_Farm.loot_log.clear();
+				ImGui::EndTabItem();
+			}
+			if (ImGui::BeginTabItem("Settings"))
+			{
+				ImGui::SeparatorText("Loot");
+				changed |= ImGui::Checkbox("Pick up loot within", &g_Farm.loot);
+				ImGui::SameLine();
+				ImGui::SetNextItemWidth(90);
+				changed |= ImGui::InputFloat("##lootrange", &g_Farm.loot_range, 0, 0, "%.0f");
+				changed |= ImGui::Checkbox("Unlock a picked up reaper at once (also when not running the floor)", &g_Farm.reaper);
+				ImGui::SeparatorText("Loot log");
+				ImGui::TextDisabled("Listed when picked up:");
+				static const char* const SHOWN[] = { "Reapers", "Gear", "Fragments", "Slormites", "Slormelines", "Slormandrites", "Anything else" };
+				for (int i = 0; i < 7; i++)
+				{
+					if (i % 4)
+						ImGui::SameLine();
+					changed |= ImGui::Checkbox(SHOWN[i], &g_Farm.loot_show[i]);
+				}
+				ImGui::EndTabItem();
+			}
+			ImGui::EndTabBar();
+			return changed;
+		}
+
+		void Load(const std::string& Name, std::istringstream& Words) override
+		{
+			int flag = 0;
+			if (Name == "key") { Words >> g_Farm.key; if (g_Farm.key < 8 || g_Farm.key > 254) g_Farm.key = VK_HOME; }
+			else if (Name == "extra") Words >> g_Farm.extra;
+			else if (Name == "loot_range") Words >> g_Farm.loot_range;
+			else if (Name == "skip_chaos") { Words >> flag; g_Farm.skip_chaos = flag != 0; }
+			else if (Name == "loot") { Words >> flag; g_Farm.loot = flag != 0; }
+			else if (Name == "reaper") { Words >> flag; g_Farm.reaper = flag != 0; }
+			else if (Name == "loot_show")
+				for (bool& show : g_Farm.loot_show)
+					if (Words >> flag) show = flag != 0;
+		}
+
+		void Save(std::ostream& File) override
+		{
+			File << "farmer.key " << g_Farm.key << '\n'
+				<< "farmer.skip_chaos " << (g_Farm.skip_chaos ? 1 : 0) << '\n'
+				<< "farmer.extra " << g_Farm.extra << '\n'
+				<< "farmer.loot " << (g_Farm.loot ? 1 : 0) << '\n'
+				<< "farmer.loot_range " << g_Farm.loot_range << '\n'
+				<< "farmer.reaper " << (g_Farm.reaper ? 1 : 0) << '\n'
+				<< "farmer.loot_show";
+			for (bool show : g_Farm.loot_show)
+				File << ' ' << (show ? 1 : 0);
+			File << '\n';
+		}
+	} g_Farmer;
+}

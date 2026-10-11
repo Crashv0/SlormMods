@@ -114,8 +114,15 @@ namespace
 	RValue& GetInputHook(CInstance* Self, CInstance* Other, RValue& Result, int ArgumentCount, RValue** Arguments)
 	{
 		RValue& result = g_GetInput(Self, Other, Result, ArgumentCount, Arguments);
+#ifdef SLORM_DEV
+		DevInput(Self, result, ArgumentCount, Arguments);
+#endif
 		// Other things than the hero run the script too.
-		if (g_Mod && g_Mod->enabled && Self == FindInstance("obj_parent_hero"))
+		if (Self != FindInstance("obj_parent_hero"))
+			return result;
+		BotInput(Self);
+		WalkInput(Self);
+		if (g_Mod && g_Mod->enabled)
 			Stepped(Self);
 		return result;
 	}

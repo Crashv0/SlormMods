@@ -25,6 +25,56 @@ static BOOL RealCursor(LPPOINT Point)
 	return g_OriginalCursor ? g_OriginalCursor(Point) : GetCursorPos(Point);
 }
 
+static ULONGLONG g_FakeUntil = 0;
+
+// The game takes the mouse's place from mouse messages, not from asking Windows.
+void OverlayFakeCursor(float Across, float Down, int Milliseconds)
+{
+	g_FakeUntil = GetTickCount64() + Milliseconds;
+	if (!g_Window || !g_OriginalProc)
+		return;
+	RECT client = {};
+	GetClientRect(g_Window, &client);
+	int x = std::clamp(static_cast<int>(Across * client.right), -30000, 30000), y = std::clamp(static_cast<int>(Down * client.bottom), -30000, 30000);
+	CallWindowProcW(g_OriginalProc, g_Window, WM_MOUSEMOVE, 0, MAKELPARAM(static_cast<short>(x), static_cast<short>(y)));
+}
+
+// The last place the real mouse told the window; -1 before any.
+static LPARAM g_RealMove = -1;
+
+void OverlayLendCursor(float Across, float Down)
+{
+	if (!g_Window || !g_OriginalProc)
+		return;
+	RECT client = {};
+	GetClientRect(g_Window, &client);
+	int x = std::clamp(static_cast<int>(Across * client.right), -30000, 30000), y = std::clamp(static_cast<int>(Down * client.bottom), -30000, 30000);
+	CallWindowProcW(g_OriginalProc, g_Window, WM_MOUSEMOVE, 0, MAKELPARAM(static_cast<short>(x), static_cast<short>(y)));
+}
+
+void OverlayClick(float Across, float Down, bool Press)
+{
+	if (!g_Window || !g_OriginalProc)
+		return;
+	RECT client = {};
+	GetClientRect(g_Window, &client);
+	LPARAM place = MAKELPARAM(static_cast<short>(Across * client.right), static_cast<short>(Down * client.bottom));
+	CallWindowProcW(g_OriginalProc, g_Window, WM_MOUSEMOVE, Press ? MK_LBUTTON : 0, place);
+	CallWindowProcW(g_OriginalProc, g_Window, Press ? WM_LBUTTONDOWN : WM_LBUTTONUP, Press ? MK_LBUTTON : 0, place);
+}
+
+void OverlayReturnCursor()
+{
+	if (!g_Window || !g_OriginalProc || GetTickCount64() < g_FakeUntil)
+		return;
+	LPARAM place = g_RealMove;
+	POINT point = {};
+	if (place == -1 && RealCursor(&point) && ScreenToClient(g_Window, &point))
+		place = MAKELPARAM(static_cast<short>(point.x), static_cast<short>(point.y));
+	if (place != -1)
+		CallWindowProcW(g_OriginalProc, g_Window, WM_MOUSEMOVE, 0, place);
+}
+
 // While the cursor is over the overlay, the game is told it is off screen, so nothing behind it hovers.
 static BOOL WINAPI HookedCursor(LPPOINT Point)
 {
@@ -329,6 +379,36 @@ static void DrawDev()
 	ImGui::TextDisabled("Dev build. Dumps go to mods/Aurie/SlormSuite.dump.txt, the trace to aurie.log.");
 	ImGui::TextDisabled("F9 dumps too, without moving the mouse.");
 	ImGui::Checkbox("Trace script calls and first-time events", &g_Dev.trace);
+	ImGui::Checkbox("Log the hero's keys and movement variables when they change", &g_Dev.watch);
+	ImGui::SeparatorText("Movement tests");
+	static const char* directions[] = { "right", "left", "up", "down" };
+	ImGui::TextUnformatted("Hold a direction key for 1 s:");
+	for (int i = 0; i < 4; i++)
+	{
+		ImGui::SameLine();
+		if (ImGui::Button(directions[i]) && g_Dev.walk < 0)
+			g_Dev.walk = i;
+	}
+	ImGui::SetNextItemWidth(160);
+	ImGui::InputFloat2("from the hero", g_Dev.walk_offset, "%.0f");
+	ImGui::SameLine();
+	if (ImGui::Button("Walk there"))
+		WalkTo(g_Dev.walk_offset[0], g_Dev.walk_offset[1], true);
+	ImGui::SameLine();
+	if (ImGui::Button("Stop"))
+		WalkStop();
+	if (ImGui::Button("Mark here"))
+		g_Dev.mark_want = true;
+	ImGui::SameLine();
+	if (ImGui::Button("Walk to the mark") && g_Dev.marked)
+		WalkTo(g_Dev.mark_x, g_Dev.mark_y);
+	ImGui::SameLine();
+	if (g_Dev.marked) ImGui::Text("mark %.0f %.0f", g_Dev.mark_x, g_Dev.mark_y);
+	else ImGui::TextDisabled("no mark");
+	ImGui::TextDisabled("F6 walks by the offset, F4 to the mouse, F3 marks, F2 walks to the mark.");
+	static const char* states[] = { "no walk yet", "starting", "walking", "arrived", "failed" };
+	const Walk& walk = WalkStatus();
+	ImGui::Text("%s  to %.0f %.0f  tries %d  %.1f s  %s", states[walk.state], walk.x, walk.y, walk.tries, walk.seconds, walk.why.c_str());
 	static char words[256] = "";
 	if (!words[0])
 		snprintf(words, sizeof(words), "%s", g_Dev.dump_words.c_str());
@@ -370,12 +450,22 @@ static void DrawWindow()
 			changed |= DrawMods();
 			ImGui::EndTabItem();
 		}
-		for (Feature* feature : Features())
+		// The mods' tabs in a set order, then any other.
+		static const char* const ORDER[] = { "Macros", "ESP", "Farmer", "Forge", nullptr };
+		for (const char* name : ORDER)
 		{
-			if (!feature->tab || !ImGui::BeginTabItem(feature->tab))
-				continue;
-			changed |= DrawFeature(feature);
-			ImGui::EndTabItem();
+			for (Feature* feature : Features())
+			{
+				if (!feature->tab)
+					continue;
+				bool listed = std::find_if(std::begin(ORDER), std::end(ORDER) - 1, [&](const char* Of) { return std::string_view(Of) == feature->tab; }) != std::end(ORDER) - 1;
+				if (name ? std::string_view(name) != feature->tab : listed)
+					continue;
+				if (!ImGui::BeginTabItem(feature->tab))
+					continue;
+				changed |= DrawFeature(feature);
+				ImGui::EndTabItem();
+			}
 		}
 		if (ImGui::BeginTabItem("Options"))
 		{
@@ -520,6 +610,11 @@ static LRESULT CALLBACK WindowProc(HWND Window, UINT Message, WPARAM WParam, LPA
 	if (Message == WM_INPUT) LogOnce(saw_raw, "raw input seen");
 	if (Message == WM_CHAR) LogOnce(saw_char, "char messages seen");
 
+	if (Message == WM_MOUSEMOVE)
+		g_RealMove = LParam;
+	// The real cursor must not undo the place a walk has told the game.
+	if (Message == WM_MOUSEMOVE && GetTickCount64() < g_FakeUntil)
+		return 0;
 	if (g_Ready && g_Visible)
 	{
 		// Mouse position and buttons are polled per frame; wheel and keys come from here.

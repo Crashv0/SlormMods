@@ -49,6 +49,8 @@
     <ClCompile Include="source\ModuleMain.cpp" />
     <ClCompile Include="source\Game.cpp" />
     <ClCompile Include="source\Dev.cpp" />
+    <ClCompile Include="source\Walk.cpp" />
+    <ClCompile Include="source\Bot.cpp" />
     <ClCompile Include="source\features\*.cpp" />
     <ClCompile Include="source\Overlay.cpp" />
     <ClCompile Include="vendor\imgui\imgui.cpp" />

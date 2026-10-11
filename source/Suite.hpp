@@ -88,6 +88,35 @@ YYTK::PFUNC_YYGMLScript FindScript(const char* Name);
 // Runs it as the UI object would.
 YYTK::RValue CallScript(YYTK::PFUNC_YYGMLScript Script, YYTK::CInstance* Self, std::vector<YYTK::RValue> Arguments = {});
 
+// Walking the hero to a place by the game's click to move.
+enum WalkState { WALK_NONE, WALK_STARTING, WALK_WALKING, WALK_ARRIVED, WALK_FAILED };
+struct Walk
+{
+	int state = WALK_NONE;
+	// Where to, in the room's units.
+	double x = 0, y = 0;
+	// Close enough to count as there, and the longest it may take, in seconds.
+	double reach = 24, limit = 20;
+	int tries = 0;
+	double seconds = 0;
+	// Why it failed.
+	std::string why;
+};
+// A place in the room, or one that far from the hero.
+void WalkTo(double X, double Y, bool Relative = false, double Reach = 24);
+void WalkStop();
+const Walk& WalkStatus();
+// Called for the hero from the input hook, after the game has read the real keys.
+void WalkInput(YYTK::CInstance* Hero);
+// Tells the game the mouse is on a place in the room, for this long; false without a view of the room.
+bool AimAt(double X, double Y, int Milliseconds);
+// The same for the hero's own step only, so the view and the real mouse are left alone.
+bool AimStep(double X, double Y);
+// Called as a script of the hero's step is entered (1) and left (-1).
+void WalkScript(int Enter);
+// The floor bot's presses, made for the hero from the input hook.
+void BotInput(YYTK::CInstance* Hero);
+
 template <typename... Args>
 void Log(const char* Format, Args... Arguments)
 {
@@ -104,13 +133,30 @@ struct Dev
 	std::string dump_words = "menu,launch,room,run,floor,breach,portal,temple,forge,hub,citizen,mission,level,chest,challenge,choice,wave,war_,reward,procedural,controller,camera,draw_game,surface,hero,aim_cursor,cursor,kb_,kbc_,input,ctm,skill_equipped,cooldown";
 	std::string result;
 	bool trace = true;
+	// Logs the hero's keys and movement variables when they change.
+	bool watch = true;
+	// Test presses, made in the input hook. The direction held, -1 for none, and until when; 0 before it starts.
+	int walk = -1;
+	unsigned long long walk_until = 0;
+	// How far from the hero the walk test goes, in the room's units.
+	float walk_offset[2] = { 300, 0 };
+	// The game is told the mouse is where the hero walks to all the time, not only in the hero's step.
+	bool hold_mouse = false;
+	// A place the hero stood, to walk back to from far off.
+	bool mark_want = false, marked = false;
+	double mark_x = 0, mark_y = 0;
 };
 extern Dev g_Dev;
 // Dumps without moving the mouse.
 constexpr int DUMP_KEY = 0x78;
+// Walk tests: by the offset of the Dev tab, and to the mouse.
+constexpr int WALK_KEY = 0x75, WALK_MOUSE_KEY = 0x73;
+// Remembers where the hero stands, and walks back there.
+constexpr int MARK_KEY = 0x72, WALK_MARK_KEY = 0x71;
 void DevStart(const std::string& Folder);
 void DevTick(YYTK::CInstance* Self);
 void DevEvent(YYTK::CCode* Code);
+void DevInput(YYTK::CInstance* Self, const YYTK::RValue& Result, int ArgumentCount, YYTK::RValue** Arguments);
 std::string Show(const YYTK::RValue& Value, int Depth, size_t Limit);
 #endif
 
@@ -123,4 +169,12 @@ inline std::string Lower(std::string Text)
 bool OverlayInstall(YYTK::YYTKInterface* Yytk);
 bool OverlayWantsMouse();
 bool OverlayWantsKeys();
+// Tells the game the mouse is at this place, in shares of the window, and keeps the real mouse from
+// moving it for this long.
+void OverlayFakeCursor(float Across, float Down, int Milliseconds);
+// The mouse told to the game for a moment, with no hold on the real one; and the real one told again.
+void OverlayLendCursor(float Across, float Down);
+void OverlayReturnCursor();
+// A left button press or release told to the game at a place on the screen, as shares of it.
+void OverlayClick(float Across, float Down, bool Press);
 void OverlaySetIniPath(const std::string& Path);

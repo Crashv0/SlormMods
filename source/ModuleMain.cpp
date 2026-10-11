@@ -1,4 +1,5 @@
 #include "Suite.hpp"
+#include <unordered_map>
 #include "Version.hpp"
 #include <fstream>
 using namespace Aurie;
@@ -121,6 +122,25 @@ static void CodeCallback(FWCodeEvent& Event)
 #ifdef SLORM_DEV
 	DevEvent(code);
 #endif
+	// The hero's step finds the mouse where a walk wants it; nothing else does.
+	static std::unordered_map<CCode*, bool> hero_steps;
+	if (code)
+	{
+		auto known = hero_steps.find(code);
+		if (known == hero_steps.end())
+		{
+			std::string_view name = code->GetName() ? code->GetName() : "";
+			bool hero = name.rfind("gml_Object_obj_parent_hero_Step", 0) == 0 || (name.rfind("gml_Object_obj_hero_", 0) == 0 && name.find("_Step_") != std::string_view::npos);
+			known = hero_steps.emplace(code, hero).first;
+		}
+		if (known->second)
+		{
+			WalkScript(1);
+			if (!Event.CalledOriginal()) Event.Call();
+			WalkScript(-1);
+			return;
+		}
+	}
 	if (code != step_code || !code)
 	{
 		if (step_code || !code || !code->GetName() || std::string_view(code->GetName()) != "gml_Object_obj_ui_next_gen_Step_0")
