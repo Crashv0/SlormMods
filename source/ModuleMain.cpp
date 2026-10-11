@@ -1023,7 +1023,11 @@ static void MarkTooltip(CInstance* Self, const Build& Build)
 	std::vector<RValue> heroes = bags.ToVector();
 	if (g_Live.hero < 0 || g_Live.hero >= static_cast<int>(heroes.size()) || !heroes[g_Live.hero].IsArray())
 		return;
-	LiveItem held = ReadItem(g_Yytk->CallBuiltin("array_get", { heroes[g_Live.hero], get("tooltip_value") }));
+	// Most tooltips name a place in the inventory; some carry the item itself.
+	RValue about = get("tooltip_value");
+	if (!about.IsArray() && !about.IsNumberConvertible())
+		return;
+	LiveItem held = ReadItem(about.IsArray() ? about : g_Yytk->CallBuiltin("array_get", { heroes[g_Live.hero], about }));
 	if (!held.present)
 		return;
 
@@ -1032,7 +1036,7 @@ static void MarkTooltip(CInstance* Self, const Build& Build)
 	const BuildItem* wanted = nullptr;
 	int best = -1;
 	// A worn item goes with the build item its slot's frame goes with.
-	int place = static_cast<int>(ToNumber(get("tooltip_value")));
+	int place = about.IsArray() ? -1 : static_cast<int>(ToNumber(about));
 	for (const BuildItem& item : Build.items)
 		if (place >= 0 && place < GEAR_SLOTS && GearIndex(item) == place)
 		{
