@@ -58,6 +58,31 @@ static constexpr std::array TRACED = {
 	"scr_ui_menu_war_chest_add_reward",
 	"scr_ui_menu_war_chest_loot",
 	"scr_corrupted_slorm_get_cost_forge",
+	"scr_general_skill_cast",
+	"scr_general_skill_add_recast",
+	"scr_new_attack_state_start",
+	"scr_new_attack_state_end",
+	"scr_new_attack_state_cost",
+	"scr_new_attack_state_aim",
+	"scr_new_attack_state_get_cursor",
+	"scr_new_attack_state_start_cooldown",
+	"scr_aura_toggle",
+	"scr_mana_withdraw",
+	"scr_click_to_move",
+	"scr_hero_move",
+	"scr_hero_through_door",
+	"scr_target_finder",
+	"scr_hero_check_if_engaged",
+};
+// Of those, the ones called many times a step: each distinct call and result is logged once.
+static constexpr std::array BUSY = {
+	"scr_new_attack_state_aim",
+	"scr_new_attack_state_get_cursor",
+	"scr_new_attack_state_cost",
+	"scr_click_to_move",
+	"scr_hero_move",
+	"scr_target_finder",
+	"scr_hero_check_if_engaged",
 };
 static std::array<PFUNC_YYGMLScript, TRACED.size()> g_Originals = {};
 static std::array<std::string, TRACED.size()> g_LastCall;
@@ -100,6 +125,23 @@ std::string Show(const RValue& Value, int Depth, size_t Limit)
 template <size_t Index>
 static RValue& TraceHook(CInstance* Self, CInstance* Other, RValue& Result, int ArgumentCount, RValue** Arguments)
 {
+	static const bool busy = std::find_if(BUSY.begin(), BUSY.end(), [](const char* Name) { return std::string_view(Name) == TRACED[Index]; }) != BUSY.end();
+	if (g_Dev.trace && busy)
+	{
+		std::string call = "(";
+		for (int i = 0; i < ArgumentCount; i++)
+			call += (i ? ", " : "") + (Arguments[i] ? Show(*Arguments[i], 1, 6) : std::string("null"));
+		RValue& result = g_Originals[Index](Self, Other, Result, ArgumentCount, Arguments);
+		call += ") -> " + Show(result, 1, 6);
+		static std::unordered_set<std::string> seen;
+		if (seen.size() < 80 && seen.insert(call).second)
+		{
+			RValue object = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("object_index") });
+			std::string who = object.m_Kind != VALUE_UNDEFINED && object.m_Kind != VALUE_UNSET && object.IsNumberConvertible() ? ToText(g_Yytk->CallBuiltin("object_get_name", { object })) : "?";
+			Log("busy %s%s as %s", TRACED[Index], call.substr(0, 400).c_str(), who.c_str());
+		}
+		return result;
+	}
 	if (g_Dev.trace)
 	{
 		std::string call = "(";
@@ -218,11 +260,22 @@ static void Dump(CInstance* Self)
 	file << "--- obj_ui_next_gen ---\n";
 	DumpNames(file, g_Yytk->CallBuiltin("variable_instance_get_names", { RValue(Self) }),
 		[&](const std::string& Name) { return Local(Self, Name.c_str()); });
-	// The first instance of each object the words name.
+	// The first instance of each object the words name, and of the first two kinds of enemy.
+	RValue lifeform = g_Yytk->CallBuiltin("asset_get_index", { RValue("obj_parent_lifeform") });
+	int enemies = 0;
 	for (const auto& [name, instances] : objects)
 	{
-		if (name == "obj_ui_next_gen" || !Interesting(name))
+		if (name == "obj_ui_next_gen")
 			continue;
+		bool enemy = false;
+		if (!Interesting(name))
+		{
+			RValue object = g_Yytk->CallBuiltin("asset_get_index", { RValue(name.c_str()) });
+			enemy = enemies < 2 && ToNumber(g_Yytk->CallBuiltin("object_is_ancestor", { object, lifeform })) > 0;
+			if (!enemy)
+				continue;
+			enemies++;
+		}
 		const RValue& instance = instances[0];
 		file << "--- " << name << " ---\n";
 		for (const char* place : { "x", "y" })
