@@ -136,7 +136,7 @@ extern OutlineStyle g_Outlines[OUTLINE_COUNT];
 extern const OutlineStyle OUTLINE_DEFAULTS[OUTLINE_COUNT];
 const char* OutlineName(int Kind);
 // Where the rank text sits against its icon, per screen.
-enum LabelKind { LABEL_LEGACY, LABEL_UPGRADE, LABEL_ATTRIBUTE, LABEL_COUNT };
+enum LabelKind { LABEL_LEGACY, LABEL_UPGRADE, LABEL_ATTRIBUTE, LABEL_NETHER, LABEL_COUNT };
 enum LabelSide { SIDE_BOTTOM, SIDE_TOP, SIDE_LEFT, SIDE_RIGHT, SIDE_COUNT };
 struct LabelStyle
 {
@@ -149,7 +149,7 @@ extern LabelStyle g_Labels[LABEL_COUNT];
 extern const LabelStyle LABEL_DEFAULTS[LABEL_COUNT];
 
 // Colour of each Mark, as red, green, blue; indexed by the Mark's number, None unused.
-constexpr int MARK_COUNT = 5;
+constexpr int MARK_COUNT = 6;
 extern float g_MarkColors[MARK_COUNT][3];
 extern const float MARK_DEFAULTS[MARK_COUNT][3];
 
@@ -214,12 +214,33 @@ struct Live
 	std::vector<int> attributes;
 	// The numbered slots of the skill bar, -1 when empty. Numbered as the build's activables are.
 	std::vector<int> activables;
+	// By warlord: the legendaries it can reward this hero with.
+	std::map<int, std::vector<int>> nether_rewards;
 };
 extern Live g_Live;
 
+// The Netherworld search: warlords whose possible rewards hold enough legendaries of a slot, named on the map.
+struct NetherRule
+{
+	// Index into GEAR_SLOT_REFS; -1 for whichever slot has enough.
+	int slot = 0;
+	int count = 1;
+};
+extern bool g_NetherSearch;
+// A warlord must meet every rule, not just one.
+extern bool g_NetherAll;
+extern std::vector<NetherRule> g_NetherRules;
+constexpr int SLOT_KINDS = 10;
+// The game's names for the slots, and the ones it shows.
+extern const char* const GEAR_SLOT_REFS[SLOT_KINDS];
+extern const char* const GEAR_SLOT_NAMES[SLOT_KINDS];
+// Whether a warlord's rewards meet the search; Note lists the rules met, as "2 Ring".
+bool NetherMatch(const std::vector<int>& Rewards, std::string& Note);
+
 // How one part of the character stands against the build. Todo is in the build and not there yet;
 // Wrong is there and not in the build, or in it with no rank; Partial has some ranks.
-enum class Mark { None, Match, Partial, Wrong, Todo };
+// Search is a warlord the Netherworld search found.
+enum class Mark { None, Match, Partial, Wrong, Todo, Search };
 // An upgrade of a skill. Rank and Wanted come back as the ranks put in and the build's, -1 when the build has none.
 Mark UpgradeMark(const Build& Build, int Id, int& Rank, int& Wanted);
 // A skill: whether it is equipped as the build has it, and its upgrades with it.
@@ -292,6 +313,16 @@ bool LegendaryHasRange(int Id);
 // Whether any shown value of the legendary differs between two rolls; small values round to the same number.
 bool LegendaryGains(int Id, double From, double To);
 std::string UltimatumName(int Id);
+// The slot a legendary goes in, as an index into GEAR_SLOT_REFS; -1 when unknown.
+int LegendarySlot(int Id);
+// A warlord of the Netherworld map, by its number in dat_war.json.
+struct WarlordInfo
+{
+	std::string name;
+	// On the map, in the table's own units.
+	double x = 0, y = 0;
+};
+const std::map<int, WarlordInfo>& Warlords();
 
 bool OverlayInstall(YYTK::YYTKInterface* Yytk);
 bool OverlayWantsMouse();

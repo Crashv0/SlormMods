@@ -18,7 +18,11 @@ struct SkillInfo
 };
 static std::map<int, SkillInfo> g_Skills[3];
 static std::map<int, std::string> g_Smiths, g_Traits, g_Ultimatums, g_Weapons;
-static std::map<int, int> g_LegacyRealms, g_ReaperOrders;
+static std::map<int, int> g_LegacyRealms, g_ReaperOrders, g_LegendarySlots;
+static std::map<int, WarlordInfo> g_Warlords;
+
+const char* const GEAR_SLOT_REFS[SLOT_KINDS] = { "helm", "body", "shoulder", "bracer", "glove", "boot", "ring", "amulet", "belt", "cape" };
+const char* const GEAR_SLOT_NAMES[SLOT_KINDS] = { "Helm", "Armor", "Shoulder", "Bracer", "Glove", "Boot", "Ring", "Amulet", "Belt", "Cape" };
 // Base values the roll scales (RANGE 1), per legendary.
 static std::map<int, std::vector<double>> g_LegendaryRanges;
 static std::map<int, std::string> g_Legacies, g_Reapers, g_Runes, g_Activables, g_Legendaries;
@@ -234,6 +238,8 @@ void LoadGameData()
 	{
 		if (ToInt(row["REF"]) < 0)
 			continue;
+		for (int slot = 0; slot < SLOT_KINDS; slot++)
+			if (row["ITEM"] == GEAR_SLOT_REFS[slot]) g_LegendarySlots[ToInt(row["REF"])] = slot;
 		std::vector<double>& ranged = g_LegendaryRanges[ToInt(row["REF"])];
 		std::stringstream values(row["VALUE"]), ranges(row["RANGE"]);
 		for (std::string value, range; std::getline(values, value, '|') && std::getline(ranges, range, '|');)
@@ -241,6 +247,16 @@ void LoadGameData()
 			try { if (std::stod(range) == 1) ranged.push_back(std::stod(value)); }
 			catch (...) {}
 		}
+	}
+	// Only the map's warlords have a boss.
+	for (Row& row : LoadTable(game / "dat_war.json"))
+	{
+		if (ToInt(row["REF"]) < 0 || row["WARLORD_BOSS"].empty())
+			continue;
+		WarlordInfo& lord = g_Warlords[ToInt(row["REF"])];
+		lord.name = row["EN_DESC"];
+		lord.x = ToInt(row["X"], 0);
+		lord.y = ToInt(row["Y"], 0);
 	}
 
 	g_Stats.clear();
@@ -354,6 +370,14 @@ bool LegendaryGains(int Id, double From, double To)
 		if (LegendaryShown(value, To) != LegendaryShown(value, From)) return true;
 	return false;
 }
+
+int LegendarySlot(int Id)
+{
+	auto found = g_LegendarySlots.find(Id);
+	return found != g_LegendarySlots.end() ? found->second : -1;
+}
+
+const std::map<int, WarlordInfo>& Warlords() { return g_Warlords; }
 
 int ReaperOrder(int Id)
 {

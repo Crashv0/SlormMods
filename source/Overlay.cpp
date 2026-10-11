@@ -636,7 +636,7 @@ static bool DrawOptions()
 		if (ImGui::BeginTabItem("Rank text"))
 		{
 			ImGui::TextDisabled("Where the rank text sits, and how far to move it from there.");
-			static const char* label_names[] = { "Legacy ranks", "Upgrade ranks", "Attribute points" };
+			static const char* label_names[] = { "Legacy ranks", "Upgrade ranks", "Attribute points", "Netherworld rewards" };
 			static const char* sides[] = { "Bottom", "Top", "Left", "Right" };
 			for (int kind = 0; kind < LABEL_COUNT; kind++)
 			{
@@ -662,8 +662,8 @@ static bool DrawOptions()
 		}
 		if (ImGui::BeginTabItem("Colors"))
 		{
-			ImGui::TextDisabled("Used by the outlines, the rank text and the Build tab.");
-			static const char* states[] = { "", "Matches the build", "Some ranks in", "Not in the build, or no ranks", "Still to place" };
+			ImGui::TextDisabled("Used by the outlines, the text and the Build and Nether tabs.");
+			static const char* states[] = { "", "Matches the build", "Some ranks in", "Not in the build, or no ranks", "Still to place", "Found by the Netherworld search" };
 			for (int kind = 1; kind < MARK_COUNT; kind++)
 				changed |= ImGui::ColorEdit3(states[kind], g_MarkColors[kind], ImGuiColorEditFlags_NoInputs);
 			if (ImGui::Button("Reset colors"))
@@ -752,6 +752,86 @@ static void DrawDev()
 }
 #endif
 
+// The Netherworld search: its rules, then the warlords that meet them now.
+static bool DrawNether()
+{
+	bool changed = ImGui::Checkbox("Label warlords on the Netherworld map", &g_NetherSearch);
+	ImGui::TextDisabled("A warlord is labeled when its possible rewards hold enough legendaries of one slot.");
+	for (size_t i = 0; i < g_NetherRules.size(); i++)
+	{
+		NetherRule& rule = g_NetherRules[i];
+		ImGui::PushID(static_cast<int>(i));
+		if (ImGui::SmallButton("x"))
+		{
+			g_NetherRules.erase(g_NetherRules.begin() + i);
+			ImGui::PopID();
+			changed = true;
+			break;
+		}
+		ImGui::SameLine();
+		ImGui::TextUnformatted("at least");
+		ImGui::SameLine();
+		ImGui::SetNextItemWidth(90);
+		changed |= ImGui::SliderInt("##count", &rule.count, 1, 7);
+		ImGui::SameLine();
+		ImGui::SetNextItemWidth(110);
+		// "Any slot" heads the list.
+		static const char* choices[SLOT_KINDS + 1] = { "Any slot" };
+		std::copy(GEAR_SLOT_NAMES, GEAR_SLOT_NAMES + SLOT_KINDS, choices + 1);
+		int choice = rule.slot + 1;
+		if (ImGui::Combo("##slot", &choice, choices, SLOT_KINDS + 1))
+		{
+			rule.slot = choice - 1;
+			changed = true;
+		}
+		ImGui::PopID();
+	}
+	if (ImGui::Button("Add a rule"))
+	{
+		g_NetherRules.push_back({});
+		changed = true;
+	}
+	if (g_NetherRules.size() > 1)
+	{
+		ImGui::SameLine();
+		changed |= ImGui::Checkbox("Must meet every rule", &g_NetherAll);
+	}
+
+	ImGui::SeparatorText("Found");
+	if (g_NetherRules.empty())
+		ImGui::TextDisabled("Add a rule to search.");
+	else if (g_Live.nether_rewards.empty())
+		ImGui::TextDisabled("Load a character to search its Netherworld.");
+	else
+	{
+		int found = 0;
+		for (const auto& [id, rewards] : g_Live.nether_rewards)
+		{
+			std::string note;
+			auto lord = Warlords().find(id);
+			if (lord == Warlords().end() || !NetherMatch(rewards, note))
+				continue;
+			found++;
+			ImGui::TextColored(MarkColor(Mark::Search), "%s", lord->second.name.c_str());
+			ImGui::SameLine();
+			ImGui::TextDisabled("%s", note.c_str());
+			if (ImGui::IsItemHovered())
+			{
+				std::string list;
+				for (int reward : rewards)
+				{
+					int slot = LegendarySlot(reward);
+					list += (list.empty() ? "" : "\n") + LegendaryName(reward) + (slot >= 0 ? std::string(" (") + GEAR_SLOT_NAMES[slot] + ")" : "");
+				}
+				ImGui::SetTooltip("%s", list.c_str());
+			}
+		}
+		if (!found)
+			ImGui::TextDisabled("No warlord meets the search.");
+	}
+	return changed;
+}
+
 static void DrawWindow()
 {
 	std::lock_guard guard(g_Lock);
@@ -776,6 +856,11 @@ static void DrawWindow()
 		if (ImGui::BeginTabItem("Imports"))
 		{
 			changed |= DrawBuilds();
+			ImGui::EndTabItem();
+		}
+		if (ImGui::BeginTabItem("Nether"))
+		{
+			changed |= DrawNether();
 			ImGui::EndTabItem();
 		}
 		if (ImGui::BeginTabItem("Options"))

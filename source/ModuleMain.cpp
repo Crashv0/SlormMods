@@ -26,12 +26,12 @@ bool g_Marks = true;
 const OutlineStyle OUTLINE_DEFAULTS[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 }, { 11.1f, -8.5f }, { 5.8f, 3.8f }, { 4, 0 }, { 3, 0 }, { 2.7f, 5.1f, 0, 4.1f }, { 12, 0 }, { 3, 0 }, { 4, 4.1f, 5.2f, 4.9f } };
 OutlineStyle g_Outlines[OUTLINE_COUNT] = { { 3, 0 }, { 3, -2 }, { 8.3f, -3.3f }, { 6, 0 }, { 12, 0 }, { 11.1f, -8.5f }, { 5.8f, 3.8f }, { 4, 0 }, { 3, 0 }, { 2.7f, 5.1f, 0, 4.1f }, { 12, 0 }, { 3, 0 }, { 4, 4.1f, 5.2f, 4.9f } };
 
-const LabelStyle LABEL_DEFAULTS[LABEL_COUNT] = { { SIDE_BOTTOM, 0, 0 }, { SIDE_BOTTOM, 0, -8 }, { SIDE_LEFT, -6, 0 } };
-LabelStyle g_Labels[LABEL_COUNT] = { { SIDE_BOTTOM, 0, 0 }, { SIDE_BOTTOM, 0, -8 }, { SIDE_LEFT, -6, 0 } };
+const LabelStyle LABEL_DEFAULTS[LABEL_COUNT] = { { SIDE_BOTTOM, 0, 0 }, { SIDE_BOTTOM, 0, -8 }, { SIDE_LEFT, -6, 0 }, { SIDE_BOTTOM, 0, 0 } };
+LabelStyle g_Labels[LABEL_COUNT] = { { SIDE_BOTTOM, 0, 0 }, { SIDE_BOTTOM, 0, -8 }, { SIDE_LEFT, -6, 0 }, { SIDE_BOTTOM, 0, 0 } };
 
-// None, match, partial, wrong, still to place.
-const float MARK_DEFAULTS[MARK_COUNT][3] = { { 1, 1, 1 }, { 0.35f, 0.82f, 0.35f }, { 0.96f, 0.59f, 0.16f }, { 0.94f, 0.24f, 0.24f }, { 0.87f, 0.21f, 0.87f } };
-float g_MarkColors[MARK_COUNT][3] = { { 1, 1, 1 }, { 0.35f, 0.82f, 0.35f }, { 0.96f, 0.59f, 0.16f }, { 0.94f, 0.24f, 0.24f }, { 0.87f, 0.21f, 0.87f } };
+// None, match, partial, wrong, still to place, found by the Netherworld search.
+const float MARK_DEFAULTS[MARK_COUNT][3] = { { 1, 1, 1 }, { 0.35f, 0.82f, 0.35f }, { 0.96f, 0.59f, 0.16f }, { 0.94f, 0.24f, 0.24f }, { 0.87f, 0.21f, 0.87f }, { 0.55f, 1, 0.2f } };
+float g_MarkColors[MARK_COUNT][3] = { { 1, 1, 1 }, { 0.35f, 0.82f, 0.35f }, { 0.96f, 0.59f, 0.16f }, { 0.94f, 0.24f, 0.24f }, { 0.87f, 0.21f, 0.87f }, { 0.55f, 1, 0.2f } };
 
 const char* OutlineName(int Kind)
 {
@@ -40,6 +40,10 @@ const char* OutlineName(int Kind)
 }
 
 Live g_Live;
+
+bool g_NetherSearch = true;
+bool g_NetherAll = false;
+std::vector<NetherRule> g_NetherRules;
 
 static bool g_KeyWasDown = false;
 static bool g_MarksKeyWasDown = false;
@@ -60,6 +64,9 @@ static void LoadConfig()
 	memcpy(g_MarkColors, MARK_DEFAULTS, sizeof(g_MarkColors));
 	std::copy(std::begin(LABEL_DEFAULTS), std::end(LABEL_DEFAULTS), std::begin(g_Labels));
 	g_Appearance = Appearance();
+	g_NetherSearch = true;
+	g_NetherAll = false;
+	g_NetherRules.clear();
 
 	std::ifstream file(g_ConfigPath);
 	if (!file)
@@ -118,6 +125,21 @@ static void LoadConfig()
 				std::copy(color, color + 3, g_MarkColors[kind]);
 			continue;
 		}
+		if (first == "nether")
+		{
+			// nether SLOT COUNT
+			std::string slot;
+			NetherRule rule;
+			words >> slot >> rule.count;
+			rule.slot = -2;
+			if (slot == "any") rule.slot = -1;
+			for (int kind = 0; kind < SLOT_KINDS; kind++)
+				if (slot == GEAR_SLOT_REFS[kind]) rule.slot = kind;
+			if (rule.slot >= -1 && rule.count >= 1) g_NetherRules.push_back(rule);
+			continue;
+		}
+		if (first == "nether_search") { int flag = 1; words >> flag; g_NetherSearch = flag != 0; continue; }
+		if (first == "nether_all") { int flag = 0; words >> flag; g_NetherAll = flag != 0; continue; }
 		if (first == "marks") { int flag = 1; words >> flag; g_Marks = flag != 0; continue; }
 		if (first == "theme") { words >> g_Appearance.theme; continue; }
 		if (first == "accent") { int on = 0; words >> on >> g_Appearance.accent[0] >> g_Appearance.accent[1] >> g_Appearance.accent[2]; g_Appearance.custom_accent = on != 0; continue; }
@@ -143,6 +165,10 @@ void SaveConfig()
 		file << "mark_color " << kind << ' ' << g_MarkColors[kind][0] << ' ' << g_MarkColors[kind][1] << ' ' << g_MarkColors[kind][2] << '\n';
 	for (int kind = 0; kind < LABEL_COUNT; kind++)
 		file << "label " << kind << ' ' << g_Labels[kind].side << ' ' << g_Labels[kind].x << ' ' << g_Labels[kind].y << '\n';
+	for (const NetherRule& rule : g_NetherRules)
+		file << "nether " << (rule.slot < 0 ? "any" : GEAR_SLOT_REFS[rule.slot]) << ' ' << rule.count << '\n';
+	file << "nether_search " << (g_NetherSearch ? 1 : 0) << '\n'
+		<< "nether_all " << (g_NetherAll ? 1 : 0) << '\n';
 	file << "active_build " << g_ActiveBuild << '\n'
 		<< "visible " << (g_Visible ? 1 : 0) << '\n'
 		<< "marks " << (g_Marks ? 1 : 0) << '\n'
@@ -350,6 +376,27 @@ static void ReadLive(CInstance* Self)
 	}
 	if (runes.IsArray())
 		for (const RValue& rune : runes.ToVector()) live.runes.push_back(static_cast<int>(ToNumber(rune)));
+	// Each hero has a row of the map's places; a warlord's holds its reward legendaries.
+	RValue places = global("warlords_data");
+	if (places.IsArray())
+	{
+		std::vector<RValue> heroes = places.ToVector();
+		if (live.hero >= 0 && live.hero < static_cast<int>(heroes.size()) && heroes[live.hero].IsArray())
+			for (const auto& [id, lord] : Warlords())
+			{
+				RValue held = g_Yytk->CallBuiltin("array_get", { heroes[live.hero], RValue(static_cast<double>(id)) });
+				std::vector<int>& rewards = live.nether_rewards[id];
+				if (held.IsArray())
+					for (const RValue& reward : held.ToVector()) rewards.push_back(static_cast<int>(ToNumber(reward)));
+				else if (held.IsString())
+				{
+					// As the save writes them: "16.155.147".
+					std::stringstream parts(held.ToString());
+					for (std::string part; std::getline(parts, part, '.');)
+						if (!part.empty() && isdigit(static_cast<unsigned char>(part[0]))) rewards.push_back(atoi(part.c_str()));
+				}
+			}
+	}
 	live.valid = !live.legacy_ranks.empty() && !live.stones.empty() && !live.realms.empty();
 	g_Live = std::move(live);
 }
@@ -357,6 +404,32 @@ static void ReadLive(CInstance* Self)
 static int At(const std::vector<int>& Values, int Index)
 {
 	return Index >= 0 && Index < static_cast<int>(Values.size()) ? Values[Index] : 0;
+}
+
+bool NetherMatch(const std::vector<int>& Rewards, std::string& Note)
+{
+	Note.clear();
+	int counts[SLOT_KINDS] = {};
+	for (int reward : Rewards)
+	{
+		int slot = LegendarySlot(reward);
+		if (slot >= 0) counts[slot]++;
+	}
+	bool every = !g_NetherRules.empty();
+	for (const NetherRule& rule : g_NetherRules)
+	{
+		bool met = false;
+		for (int slot = 0; slot < SLOT_KINDS; slot++)
+		{
+			if ((rule.slot >= 0 && rule.slot != slot) || counts[slot] < rule.count)
+				continue;
+			met = true;
+			std::string text = std::to_string(counts[slot]) + ' ' + GEAR_SLOT_NAMES[slot];
+			if (Note.find(text) == std::string::npos) Note += (Note.empty() ? "" : ", ") + text;
+		}
+		if (!met) every = false;
+	}
+	return g_NetherAll ? every : !Note.empty();
 }
 
 Mark UpgradeMark(const Build& Build, int Id, int& Rank, int& Wanted)
@@ -674,11 +747,11 @@ static void Outline(double Left, double Top, double Right, double Bottom, Mark K
 	g_Yytk->CallBuiltin("draw_primitive_end", {});
 }
 
-// Text beside a box, edged in black so it reads over the game's art. It sits clear of the box's outline.
+// Text beside a box, edged in black so it reads over the game's art. It sits clear of the box's outline; OUTLINE_COUNT for a box with none.
 static void Label(double Left, double Top, double Right, double Bottom, const std::string& Text, Mark Kind, LabelKind Where, OutlineKind Shape)
 {
 	const LabelStyle& style = g_Labels[Where];
-	double reach = (g_Outlines[Shape].width + (std::max)(0.0f, g_Outlines[Shape].grow) + 4) * g_Unit;
+	double reach = (Shape == OUTLINE_COUNT ? 4 : g_Outlines[Shape].width + (std::max)(0.0f, g_Outlines[Shape].grow) + 4) * g_Unit;
 	double X = (Left + Right) / 2, Y = (Top + Bottom) / 2;
 	// GameMaker aligns 0 from the left or top, 1 centred, 2 from the right or bottom.
 	double across = 1, down = 1;
@@ -699,6 +772,24 @@ static void Label(double Left, double Top, double Right, double Bottom, const st
 		g_Yytk->CallBuiltin("draw_text", { RValue(X + offset[0]), RValue(Y + offset[1]), RValue(Text.c_str()) });
 	g_Yytk->CallBuiltin("draw_set_color", { RValue(MarkColor(Kind)) });
 	g_Yytk->CallBuiltin("draw_text", { RValue(X), RValue(Y), RValue(Text.c_str()) });
+}
+
+// Cuts drawing off at a panel's edge, and gives back what to hand Unclip. The scissor is in window pixels, the panel in GUI units.
+static RValue Clip(double Left, double Top, double Right, double Bottom)
+{
+	RValue old_scissor = g_Yytk->CallBuiltin("gpu_get_scissor", {});
+	double scale_x = ToNumber(g_Yytk->CallBuiltin("window_get_width", {})) / (std::max)(1.0, ToNumber(g_Yytk->CallBuiltin("display_get_gui_width", {})));
+	double scale_y = ToNumber(g_Yytk->CallBuiltin("window_get_height", {})) / (std::max)(1.0, ToNumber(g_Yytk->CallBuiltin("display_get_gui_height", {})));
+	g_Yytk->CallBuiltin("gpu_set_scissor", { RValue((Left + g_MenuX) * scale_x), RValue((Top + g_MenuY) * scale_y), RValue((Right - Left) * scale_x), RValue((Bottom - Top) * scale_y) });
+	return old_scissor;
+}
+
+static void Unclip(const RValue& Old)
+{
+	if (!Old.IsStruct())
+		return;
+	auto part = [&](const char* Name) { return g_Yytk->CallBuiltin("variable_struct_get", { Old, RValue(Name) }); };
+	g_Yytk->CallBuiltin("gpu_set_scissor", { part("x"), part("y"), part("w"), part("h") });
 }
 
 // Outlines the ancestral legacy map against the build. The UI keeps a list of what can be
@@ -729,11 +820,7 @@ static void MarkLegacies(CInstance* Self, const Build& Build)
 	}
 	double shift_x = (seen_x - pan_x) * zoom, shift_y = (seen_y - pan_y) * zoom;
 
-	// Cut the outlines off at the panel's edge. The scissor is in window pixels, the panel in GUI units.
-	RValue old_scissor = g_Yytk->CallBuiltin("gpu_get_scissor", {});
-	double scale_x = ToNumber(g_Yytk->CallBuiltin("window_get_width", {})) / (std::max)(1.0, ToNumber(g_Yytk->CallBuiltin("display_get_gui_width", {})));
-	double scale_y = ToNumber(g_Yytk->CallBuiltin("window_get_height", {})) / (std::max)(1.0, ToNumber(g_Yytk->CallBuiltin("display_get_gui_height", {})));
-	g_Yytk->CallBuiltin("gpu_set_scissor", { RValue((left + g_MenuX) * scale_x), RValue((top + g_MenuY) * scale_y), RValue((right - left) * scale_x), RValue((bottom - top) * scale_y) });
+	RValue old_scissor = Clip(left, top, right, bottom);
 
 	for (const RValue& entry : legacies.ToVector())
 	{
@@ -785,11 +872,57 @@ static void MarkLegacies(CInstance* Self, const Build& Build)
 			Outline(x1, y1, x2, y2, !wanted ? Mark::Wrong : placed ? Mark::Match : Mark::Todo, OUTLINE_SOCKET);
 	}
 
-	if (old_scissor.IsStruct())
+	Unclip(old_scissor);
+}
+
+// Half a warlord's icon at full zoom, on a 1920-wide screen.
+constexpr double NETHER_ICON = 32;
+
+// The Netherworld map: under each warlord whose possible rewards meet the search, what it met.
+static void MarkNether(CInstance* Self)
+{
+	auto get = [&](const char* Name) { return g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue(Name) }); };
+	// The launcher keeps the map while its other pages show; only the Netherworld page lists warlords.
+	bool listed = false;
+	RValue areas = get("mba");
+	if (areas.IsArray())
+		for (const RValue& entry : areas.ToVector())
+		{
+			RValue name = entry.IsArray() ? g_Yytk->CallBuiltin("array_get", { entry, RValue(0.0) }) : RValue();
+			if (name.IsString() && name.ToString() == "Warlords")
+			{
+				listed = true;
+				break;
+			}
+		}
+	if (!listed)
+		return;
+	double scale = ToNumber(g_Yytk->CallBuiltin("variable_global_get", { RValue("ui_scale") }));
+	if (scale <= 0)
+		scale = 1;
+	// The picture's corner sits elsewhere once the map is enlarged.
+	bool large = ToNumber(get("nethermap_size")) != 0;
+	double origin_x = ToNumber(get(large ? "nethermap_x" : "nethermap_small_x")), origin_y = ToNumber(get(large ? "nethermap_y" : "nethermap_small_y"));
+	double left = ToNumber(get("nethermap_x")), top = ToNumber(get("nethermap_y"));
+	double width = ToNumber(get("default_nethermap_w")), height = ToNumber(get("default_nethermap_h"));
+	double pan_x = ToNumber(get("nethermap_off_x")), pan_y = ToNumber(get("nethermap_off_y")), zoom = ToNumber(get("nethermap_zoom"));
+	if (width <= 0 || height <= 0 || zoom <= 0)
+		return;
+
+	RValue old_scissor = Clip(left, top, left + width, top + height);
+	for (const auto& [id, rewards] : g_Live.nether_rewards)
 	{
-		auto part = [&](const char* Name) { return g_Yytk->CallBuiltin("variable_struct_get", { old_scissor, RValue(Name) }); };
-		g_Yytk->CallBuiltin("gpu_set_scissor", { part("x"), part("y"), part("w"), part("h") });
+		std::string note;
+		auto lord = Warlords().find(id);
+		if (lord == Warlords().end() || !NetherMatch(rewards, note))
+			continue;
+		double x = origin_x + (lord->second.x * scale - pan_x) * zoom, y = origin_y + (lord->second.y * scale - pan_y) * zoom;
+		double half = NETHER_ICON * scale * zoom;
+		if (x + half < left || x - half > left + width || y + half < top || y - half > top + height)
+			continue;
+		Label(x - half, y - half, x + half, y + half, note, Mark::Search, LABEL_NETHER, OUTLINE_COUNT);
 	}
+	Unclip(old_scissor);
 }
 
 // Outlines the skill screen: the row of skills, the specializations, and the grid of upgrades.
@@ -1260,11 +1393,15 @@ static void MarkBar(CInstance* Self, const Build& Build)
 static void DrawMarks(CInstance* Self)
 {
 	std::lock_guard guard(g_Lock);
-	if (!g_Marks || !g_Live.valid || g_ActiveBuild < 0 || g_ActiveBuild >= static_cast<int>(g_Builds.size()))
+	if (!g_Marks)
 		return;
-	const Build& build = g_Builds[g_ActiveBuild];
-	if (build.hero != g_Live.hero)
+	// The Netherworld search needs no build.
+	bool has_build = g_Live.valid && g_ActiveBuild >= 0 && g_ActiveBuild < static_cast<int>(g_Builds.size()) && g_Builds[g_ActiveBuild].hero == g_Live.hero;
+	bool nether = g_NetherSearch && !g_NetherRules.empty();
+	if (!has_build && !nether)
 		return;
+	static const Build no_build;
+	const Build& build = has_build ? g_Builds[g_ActiveBuild] : no_build;
 	RValue menu = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("menu_show") });
 	RValue position = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("menu_position") });
 	if (!menu.IsString() || !position.IsString())
@@ -1314,8 +1451,10 @@ static void DrawMarks(CInstance* Self)
 	};
 	shift_world(true);
 	if (bar)
-		MarkBar(Self, build);
-	else if (menu.ToString() == "elements" || menu.ToString() == "skills")
+	{
+		if (has_build) MarkBar(Self, build);
+	}
+	else if (has_build && (menu.ToString() == "elements" || menu.ToString() == "skills"))
 	{
 		if (menu.ToString() == "elements") MarkLegacies(Self, build);
 		else MarkSkills(Self, build);
@@ -1330,7 +1469,7 @@ static void DrawMarks(CInstance* Self)
 			g_Yytk->CallBuiltin("draw_surface", { tip, RValue(0.0), RValue(0.0) });
 		}
 	}
-	else if (menu.ToString() == "inventory")
+	else if (has_build && menu.ToString() == "inventory")
 	{
 		RValue shown = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("show_tooltip") });
 		RValue type = g_Yytk->CallBuiltin("variable_instance_get", { RValue(Self), RValue("tooltip_type") });
@@ -1347,6 +1486,8 @@ static void DrawMarks(CInstance* Self)
 		g_OnlyHovered = false;
 		MarkTooltip(Self, build);
 	}
+	else if (nether)
+		MarkNether(Self);
 	shift_world(false);
 	g_Yytk->CallBuiltin("draw_set_halign", { old_halign });
 	g_Yytk->CallBuiltin("draw_set_valign", { old_valign });
