@@ -56,6 +56,12 @@ namespace
 		bool reaper = true;
 		// In town, walks to Almerolis and starts the next battlefield.
 		bool restart = true;
+		// What is started from town: the battlefield, or the Great Forge.
+		int mode = 0;
+		// The Great Forge is fought up to this wave, then its chest is opened and the hero heads home.
+		int forge_waves = 10;
+		// In the Great Forge the hero holds the middle and lets the enemies come.
+		bool forge_center = true;
 		// Holds the primary skill on enemies; off for a hero whose skills fire by themselves.
 		bool attack = false;
 		std::deque<LootLine> loot_log;
@@ -143,9 +149,13 @@ namespace
 	}
 
 	// The living enemies, nearest first. Townsfolk have no life and are left out.
+	// What the nearest of them is, for the log.
+	std::string g_Nearest;
 	std::vector<Place> Enemies(CInstance* Hero, const Place& Me)
 	{
 		std::vector<Place> out;
+		double nearest = 1e9;
+		g_Nearest.clear();
 		RValue parent = g_Yytk->CallBuiltin("asset_get_index", { RValue("obj_parent_lifeform") });
 		double me = Local(Hero, "id").ToDouble();
 		int count = static_cast<int>(ToNumber(g_Yytk->CallBuiltin("instance_number", { parent })));
@@ -155,7 +165,19 @@ namespace
 			auto of = [&](const char* Name) { return ToNumber(g_Yytk->CallBuiltin("variable_instance_get", { other, RValue(Name) })); };
 			if (g_Yytk->CallBuiltin("variable_instance_get", { other, RValue("id") }).ToDouble() == me || of("dead_since") > 0 || of("the_health") <= 0)
 				continue;
+			// The game keeps some it has put away far off the map.
+			if (of("x") < 0 || of("y") < 0)
+				continue;
+			// Those who fight for the hero are alive too: only the other side counts.
+			if (ToText(g_Yytk->CallBuiltin("variable_instance_get", { other, RValue("team") })) != "bad")
+				continue;
+			std::string name = ToText(g_Yytk->CallBuiltin("object_get_name", { g_Yytk->CallBuiltin("variable_instance_get", { other, RValue("object_index") }) }));
 			out.push_back({ of("x"), of("y") });
+			if (Far(out.back(), Me) < nearest)
+			{
+				nearest = Far(out.back(), Me);
+				g_Nearest = name;
+			}
 		}
 		std::sort(out.begin(), out.end(), [&](const Place& A, const Place& B) { return Far(A, Me) < Far(B, Me); });
 		return out;
@@ -649,6 +671,246 @@ static void Picked(const RValue& Item)
 	Log("bot: reaper %.0f picked up", g_Reaper);
 }
 
+// Runs one of an instance's user events, as the game does when the hero uses it.
+static void Use(CInstance* Instance, int Number)
+{
+	RValue result;
+	g_Yytk->CallBuiltinEx(result, "event_user", Instance, Instance, { RValue(static_cast<double>(Number)) });
+}
+
+static void Call(CInstance* Self, const char* Name, std::vector<RValue> Arguments = {})
+{
+	PFUNC_YYGMLScript script = FindScript(Name);
+	if (script)
+		CallScript(script, Self, Arguments);
+	Log("bot: %s%s", Name, script ? " called" : " is not in the game");
+}
+
+// What the War Chest held comes out over a moment and is picked up before anything else is done.
+// True while there is some, or may yet be.
+static ULONGLONG g_ChestEmptied = 0;
+static bool ChestLoot(const Place& Me, ULONGLONG Now)
+{
+	static ULONGLONG seen = 0;
+	if (!g_ChestEmptied || Now - g_ChestEmptied > 30000)
+		return false;
+	Place loot;
+	if (Nearest("obj_loot", Me, loot))
+	{
+		seen = Now;
+		if (Far(loot, Me) > 30)
+			Go(loot, Now, 20);
+		if (Far(loot, Me) < 70)
+			g_PickUntil = Now + 150;
+		Say("picking up what the chest held");
+		return true;
+	}
+	if (Now - (std::max)(seen, g_ChestEmptied) < 3000)
+	{
+		Say("waiting for what the chest held");
+		return true;
+	}
+	g_ChestEmptied = 0;
+	return false;
+}
+
+// The War Chest: walked up to, opened as the hero would, and emptied with its menu's button.
+// True while there is one being seen to.
+static bool WarChest(CInstance* Self, const Place& Me, ULONGLONG Now)
+{
+	static ULONGLONG acted = 0;
+	static int tries = 0;
+	std::string menu = ToText(Local(Self, "menu_show"));
+	if (menu == "chest")
+	{
+		tries = 0;
+		if (ToText(Local(Self, "menu_position")) == "open" && Now > acted + 500)
+		{
+			acted = g_ChestEmptied = Now;
+			Call(Self, "scr_ui_menu_war_chest_loot");
+		}
+		Say("emptying the War Chest");
+		return true;
+	}
+	// The chest stands in town empty too; what it holds is a list while it holds anything.
+	CInstance* chest = Global("forge_war_chest").IsArray() ? FindInstance("obj_chest_forge") : nullptr;
+	if (!chest || menu != "none")
+	{
+		tries = 0;
+		return false;
+	}
+	// One that stays shut is left alone.
+	if (tries >= 8)
+		return false;
+	Place at = { ToNumber(Local(chest, "x")), ToNumber(Local(chest, "y")) };
+	Say("opening the War Chest");
+	if (Far(Me, at) > 70)
+	{
+		Go({ at.x, at.y + 36 }, Now, 30);
+		return true;
+	}
+	if (!Busy() && Now > acted + 1500)
+	{
+		acted = Now;
+		tries++;
+		Log("bot: using the War Chest at %.0f %.0f, try %d", at.x, at.y, tries);
+		Use(chest, 15);
+	}
+	return true;
+}
+
+// The Great Forge: waves are started by the game itself once told to, and fought by walking at what
+// comes. From the last wave wanted on, no more are started; with the room quiet the chest is opened,
+// which brings the door home.
+static bool g_InForge = false;
+// A click told to the game for a button is not also one for the hero to walk or strike on, until then.
+static ULONGLONG g_ButtonUntil = 0;
+static void GreatForge(CInstance* Self, CInstance* Hero, ULONGLONG Now)
+{
+	// The forge's start button, as shares of the screen.
+	static constexpr float START[] = { 0.8895f, 0.2847f };
+	static Place home;
+	static ULONGLONG quiet_at = 0, acted = 0, release_at = 0, between_at = 0;
+	static int said_wave = -1;
+	static std::string said_left;
+	// Where the click being made went down, and since when the hero has been dead.
+	static float clicked[2] = { START[0], START[1] };
+	static ULONGLONG dead_at = 0;
+	Place me = { ToNumber(Local(Hero, "x")), ToNumber(Local(Hero, "y")) };
+	if (!g_InForge)
+	{
+		g_InForge = true;
+		home = me;
+		// The hero comes in north of the middle. The forge's eight stands ring the room: its middle is theirs.
+		RValue stand = g_Yytk->CallBuiltin("asset_get_index", { RValue("obj_empty_item") });
+		int stands = static_cast<int>(ToNumber(g_Yytk->CallBuiltin("instance_number", { stand })));
+		double left = 1e9, right = -1e9, top = 1e9, bottom = -1e9;
+		for (int i = 0; i < stands; i++)
+		{
+			RValue it = g_Yytk->CallBuiltin("instance_find", { stand, RValue(static_cast<double>(i)) });
+			double x = ToNumber(g_Yytk->CallBuiltin("variable_instance_get", { it, RValue("x") })), y = ToNumber(g_Yytk->CallBuiltin("variable_instance_get", { it, RValue("y") }));
+			left = (std::min)(left, x), right = (std::max)(right, x), top = (std::min)(top, y), bottom = (std::max)(bottom, y);
+		}
+		if (stands >= 4)
+			home = { (left + right) / 2, (top + bottom) / 2 };
+		Log("bot: the forge's middle is %.0f %.0f, from %d stands", home.x, home.y, stands);
+		quiet_at = Now;
+		said_wave = -1;
+		dead_at = 0;
+		Log("bot: in the Great Forge at %.0f %.0f, to wave %d", me.x, me.y, g_Farm.forge_waves);
+	}
+	if (release_at && Now >= release_at)
+	{
+		release_at = 0;
+		OverlayClick(clicked[0], clicked[1], false);
+		OverlayReturnCursor();
+	}
+	char text[96];
+	// The scene of a fallen hero is clicked on until the game takes him home, chest and all.
+	if (ToText(Local(Hero, "actual_state")) == "dead")
+	{
+		static constexpr float SCENE[] = { 0.373f, 0.266f };
+		if (!dead_at)
+			dead_at = Now;
+		if (Now - dead_at > 2500 && Now > acted + 1500 && !release_at)
+		{
+			acted = Now;
+			release_at = Now + 90;
+			clicked[0] = SCENE[0], clicked[1] = SCENE[1];
+			OverlayClick(SCENE[0], SCENE[1], true);
+			Log("bot: the hero is down, clicking the scene on, %.1f s after the death", (Now - dead_at) / 1000.0);
+		}
+		return Say("the hero died, heading home");
+	}
+	dead_at = 0;
+	// The door comes once the chest is emptied; the hero's way home is its first use.
+	if (CInstance* door = FindInstance("obj_breach_door"))
+	{
+		if (ChestLoot(me, Now))
+			return;
+		Place at = { ToNumber(Local(door, "x")), ToNumber(Local(door, "y")) };
+		Say("heading home");
+		if (Far(me, at) > 80)
+			Go({ at.x, at.y + 30 }, Now, 30);
+		else if (!Busy() && Now > acted + 1500)
+		{
+			acted = Now;
+			Log("bot: taking the door home at %.0f %.0f", at.x, at.y);
+			Use(door, 14);
+		}
+		return;
+	}
+	// Waves begun so far: each has its count of enemies.
+	int waves = 0;
+	CInstance* room = FindInstance("obj_procedural");
+	RValue fought = room ? Local(room, "enemies_this_wave") : RValue();
+	if (fought.IsArray())
+		for (const RValue& enemies : fought.ToVector())
+			if (ToNumber(enemies) > 0) waves++;
+	bool last = waves >= g_Farm.forge_waves;
+	if (waves != said_wave)
+		Log("bot: forge wave %d of %d", waves, g_Farm.forge_waves);
+	said_wave = waves;
+	// The game starts each next wave by itself while this is set.
+	bool autos = ToNumber(Global("forge_auto_wave")) > 0;
+	if (autos == last)
+	{
+		g_Yytk->CallBuiltin("variable_global_set", { RValue("forge_auto_wave"), RValue(last ? 0.0 : 1.0) });
+		Log("bot: forge waves %s start by themselves", last ? "no longer" : "now");
+	}
+	std::string menu = ToText(Local(Self, "menu_show"));
+	bool between = room && ToNumber(Local(room, "forge_interwave")) > 0;
+	if (!between)
+		between_at = 0;
+	else if (!between_at)
+		between_at = Now;
+	std::vector<Place> enemies = Enemies(Hero, me);
+	// With the last wave over for a while, what still stands is not held to be an enemy.
+	if (last && between && Now - between_at > 20000 && !enemies.empty())
+	{
+		if (g_Nearest != said_left)
+			Log("bot: the last wave is long over and %d still stand, the nearest a %s; going for the chest", static_cast<int>(enemies.size()), g_Nearest.c_str());
+		said_left = g_Nearest;
+		enemies.clear();
+		quiet_at = between_at;
+	}
+	if (!enemies.empty())
+	{
+		quiet_at = Now;
+		// They come to the hero; ones still far off, where they are let in, are waited for at the middle.
+		if (g_Farm.forge_center || Far(enemies[0], me) > 280)
+		{
+			if (Far(me, home) > (g_Farm.forge_center ? 45 : 90))
+				Go(home, Now, 24);
+		}
+		else if (Far(enemies[0], me) > CLOSE)
+			Go(enemies[0], Now);
+		snprintf(text, sizeof(text), "fighting wave %d of %d", waves, g_Farm.forge_waves);
+		return Say(text);
+	}
+	if (last)
+	{
+		// Quiet for a moment with the wave over: the chest can be opened.
+		if (menu == "chest" || (between && Now - quiet_at > 3000))
+			if (WarChest(Self, me, Now))
+				return;
+		return Say("waiting for the last wave to end");
+	}
+	// A wave the game has not started by itself is started with its button.
+	if (between && menu == "none" && Now - quiet_at > 1500 && Now - between_at > 1500 && Now > acted + 4000 && !release_at)
+	{
+		acted = Now;
+		release_at = Now + 90;
+		clicked[0] = START[0], clicked[1] = START[1];
+		OverlayClick(START[0], START[1], true), g_ButtonUntil = Now + 300;
+		Log("bot: clicking the forge's start button");
+	}
+	if (Far(me, home) > (g_Farm.forge_center ? 45 : 90))
+		Go(home, Now, 24);
+	snprintf(text, sizeof(text), "waiting for wave %d", waves + 1);
+	Say(text);
+}
+
 // Town: the result of the last expedition is closed, the hero walks to Almerolis, and the battlefield
 // is started through his menu with the calls the game makes on the clicks.
 static void Hub(CInstance* Self, CInstance* Hero, ULONGLONG Now)
@@ -698,15 +960,21 @@ static void Hub(CInstance* Self, CInstance* Hero, ULONGLONG Now)
 		if (step == 0)
 		{
 			step = 1;
-			call("scr_ui_launcher_change_quest", { RValue(0.0) });
-			return Say("choosing the battlefield");
+			// Almerolis lists the battlefield first and the Great Forge third.
+			call("scr_ui_launcher_change_quest", { RValue(g_Farm.mode == 1 ? 2.0 : 0.0) });
+			return Say(g_Farm.mode == 1 ? "choosing the Great Forge" : "choosing the battlefield");
 		}
 		step = 0;
 		call("scr_run_start", {});
 		acted = Now + 3000;
-		return Say("starting the battlefield");
+		return Say("starting the expedition");
 	}
 	step = 0;
+	if (menu == "chest")
+	{
+		WarChest(Self, { 0, 0 }, Now);
+		return;
+	}
 	// A town entrance on the way can put up the story missions; they are closed and the walk goes on.
 	if (menu == "story")
 	{
@@ -717,6 +985,9 @@ static void Hub(CInstance* Self, CInstance* Hero, ULONGLONG Now)
 	if (menu != "none")
 		return Say("a menu is open in town");
 	Place me = { ToNumber(Local(Hero, "x")), ToNumber(Local(Hero, "y")) }, npc;
+	// A War Chest brought home full is emptied first, and what it held picked up.
+	if (WarChest(Self, me, Now) || ChestLoot(me, Now))
+		return;
 	if (!Nearest("obj_npc", ALMEROLIS, npc) || Far(npc, ALMEROLIS) > 90)
 		return Say("cannot find Almerolis");
 	// Stood below him, clear of a click on him.
@@ -735,7 +1006,7 @@ static void Hub(CInstance* Self, CInstance* Hero, ULONGLONG Now)
 		Log("bot: at Almerolis, he is at %.0f %.0f, the hero at %.0f %.0f", npc.x, npc.y, me.x, me.y);
 	call("scr_citizen_action", { RValue("Run Start") });
 	acted = Now + 800;
-	Say("asking Almerolis for the battlefield");
+	Say("asking Almerolis for an expedition");
 }
 
 // The hero is walked by the game's click to move, an option of the game that can be off.
@@ -821,10 +1092,19 @@ static void BotTick(CInstance* Self)
 		Rest();
 		g_Closed = -1;
 		g_Floor = Floor(), g_From.clear();
+		g_InForge = false;
 		if (hero && RoomName() == "rm_the_hub")
 			return Hub(Self, hero, GetTickCount64());
 		return Say("waiting for an expedition");
 	}
+	// The Great Forge shows its button; nowhere else does.
+	if (ToNumber(Local(Self, "forge_show_choice_button")) > 0)
+	{
+		Rest();
+		g_Closed = -1;
+		return GreatForge(Self, hero, GetTickCount64());
+	}
+	g_InForge = false;
 	std::string state = ToText(Local(hero, "actual_state"));
 	if (state == "dead")
 	{
@@ -1007,6 +1287,9 @@ void BotInput(CInstance* Hero)
 {
 	if (!g_Farm.on)
 		return;
+	if (GetTickCount64() < g_ButtonUntil)
+		for (const char* key : { "ctm_key", "attack_1_key" })
+			g_Yytk->CallBuiltin("variable_instance_set", { RValue(Hero), RValue(key), RValue(0.0) });
 	if (GetTickCount64() < g_HoverUntil)
 		AimAt(g_Hover.x, g_Hover.y, 100);
 	// The pick up key, tapped: a press each fifth of a second.
@@ -1050,20 +1333,49 @@ namespace
 		bool Draw() override
 		{
 			bool changed = false;
+			ImGui::BeginDisabled(!enabled);
+			ImGui::Checkbox("Run the expedition", &g_Farm.on);
+			ImGui::EndDisabled();
+			ImGui::SameLine();
+			changed |= KeyButton("run", &g_Farm.key);
+			ImGui::SameLine();
+			ImGui::TextDisabled("%s", g_Farm.status.c_str());
+			if (enabled && g_Farm.no_ctm)
+				ImGui::TextColored({ 1.0f, 0.45f, 0.35f, 1.0f }, "Click to Move is off in the game's options. The hero cannot be walked without it.");
+			changed |= ImGui::Checkbox("In town, go to Almerolis and start", &g_Farm.restart);
+			ImGui::SameLine();
+			// Almerolis' four, in his order; the mode each stands for, -1 for one the Farmer cannot play yet.
+			static const char* const EXPEDITIONS[] = { "Battlefield", "The Slorm Temple", "The Great Forge", "The Netherworld" };
+			static constexpr int MODES[] = { 0, -1, 1, -1 };
+			ImGui::SetNextItemWidth(170 * g_Appearance.scale);
+			if (ImGui::BeginCombo("##expedition", EXPEDITIONS[g_Farm.mode == 1 ? 2 : 0]))
+			{
+				for (int i = 0; i < 4; i++)
+				{
+					std::string label = MODES[i] < 0 ? std::string(EXPEDITIONS[i]) + " (not yet)" : EXPEDITIONS[i];
+					if (ImGui::Selectable(label.c_str(), MODES[i] == g_Farm.mode, MODES[i] < 0 ? ImGuiSelectableFlags_Disabled : 0))
+					{
+						g_Farm.mode = MODES[i];
+						changed = true;
+					}
+				}
+				ImGui::EndCombo();
+			}
+			// What the chosen expedition has to set.
+			if (g_Farm.mode == 1)
+			{
+				ImGui::Indent();
+				ImGui::SetNextItemWidth(160 * g_Appearance.scale);
+				changed |= ImGui::SliderInt("Fight to this wave, open War Chest and head home", &g_Farm.forge_waves, 1, 100, "%d", ImGuiSliderFlags_AlwaysClamp);
+				changed |= ImGui::Checkbox("Keep hero at center", &g_Farm.forge_center);
+				if (ImGui::IsItemHovered())
+					ImGui::SetTooltip("The hero holds the center of the forge and lets the enemies come.\nOff, it walks at the nearest ones.");
+				ImGui::Unindent();
+			}
 			if (!ImGui::BeginTabBar("farmer"))
-				return false;
+				return changed;
 			if (ImGui::BeginTabItem("Battlefield"))
 			{
-				ImGui::BeginDisabled(!enabled);
-				ImGui::Checkbox("Run the floor", &g_Farm.on);
-				ImGui::EndDisabled();
-				ImGui::SameLine();
-				changed |= KeyButton("run", &g_Farm.key);
-				ImGui::SameLine();
-				ImGui::TextDisabled("%s", g_Farm.status.c_str());
-				if (enabled && g_Farm.no_ctm)
-					ImGui::TextColored({ 1.0f, 0.45f, 0.35f, 1.0f }, "Click to Move is off in the game's options. The hero cannot be walked without it.");
-				changed |= ImGui::Checkbox("In town, start the next battlefield at Almerolis", &g_Farm.restart);
 				ImGui::SeparatorText("Breaches");
 				changed |= ImGui::Checkbox("Skip Breach V", &g_Farm.skip_chaos);
 				ImGui::SetNextItemWidth(90);
@@ -1134,6 +1446,9 @@ namespace
 			else if (Name == "extra") Words >> g_Farm.extra;
 			else if (Name == "loot_range") Words >> g_Farm.loot_range;
 			else if (Name == "skip_chaos") { Words >> flag; g_Farm.skip_chaos = flag != 0; }
+			else if (Name == "mode") { Words >> g_Farm.mode; g_Farm.mode = g_Farm.mode == 1 ? 1 : 0; }
+			else if (Name == "forge_waves") { Words >> g_Farm.forge_waves; g_Farm.forge_waves = (std::min)((std::max)(g_Farm.forge_waves, 1), 100); }
+			else if (Name == "forge_center") { Words >> flag; g_Farm.forge_center = flag != 0; }
 			else if (Name == "restart") { Words >> flag; g_Farm.restart = flag != 0; }
 			else if (Name == "loot") { Words >> flag; g_Farm.loot = flag != 0; }
 			else if (Name == "reaper") { Words >> flag; g_Farm.reaper = flag != 0; }
@@ -1148,6 +1463,9 @@ namespace
 				<< "farmer.skip_chaos " << (g_Farm.skip_chaos ? 1 : 0) << '\n'
 				<< "farmer.extra " << g_Farm.extra << '\n'
 				<< "farmer.restart " << (g_Farm.restart ? 1 : 0) << '\n'
+				<< "farmer.mode " << g_Farm.mode << '\n'
+				<< "farmer.forge_waves " << g_Farm.forge_waves << '\n'
+				<< "farmer.forge_center " << (g_Farm.forge_center ? 1 : 0) << '\n'
 				<< "farmer.loot " << (g_Farm.loot ? 1 : 0) << '\n'
 				<< "farmer.loot_range " << g_Farm.loot_range << '\n'
 				<< "farmer.reaper " << (g_Farm.reaper ? 1 : 0) << '\n'

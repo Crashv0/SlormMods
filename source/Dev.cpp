@@ -57,6 +57,10 @@ static constexpr std::array TRACED = {
 	"scr_forge_rewards_get_upgrade_result",
 	"scr_ui_menu_war_chest_add_reward",
 	"scr_ui_menu_war_chest_loot",
+	"scr_ui_menu_war_chest_loot_into_chest",
+	"scr_ui_menus_war_chest",
+	"scr_ui_menus_forge_choices",
+	"scr_procedural_great_forge",
 	"scr_corrupted_slorm_get_cost_forge",
 	"scr_general_skill_cast",
 	"scr_general_skill_add_recast",
@@ -173,6 +177,17 @@ static RValue& TraceHook(CInstance* Self, CInstance* Other, RValue& Result, int 
 		g_LastStep[Index] = g_Step;
 	}
 	RValue& result = g_Originals[Index](Self, Other, Result, ArgumentCount, Arguments);
+	// The forge as it is made and its chest as it is opened, each at most once in ten seconds.
+	if (std::string_view(TRACED[Index]) == "scr_procedural_great_forge" || std::string_view(TRACED[Index]) == "scr_ui_menus_war_chest")
+	{
+		static ULONGLONG dumped = 0;
+		if (GetTickCount64() - dumped > 10000)
+		{
+			dumped = GetTickCount64();
+			g_Dev.dump_note = std::string_view(TRACED[Index]) == "scr_procedural_great_forge" ? "forge made" : "war chest menu";
+			g_Dev.want_dump = true;
+		}
+	}
 	// The forge's offers are dumped as soon as they exist, and a floor as it ends.
 	if (std::string_view(TRACED[Index]) == "scr_ui_menu_forge_choice_create" || std::string_view(TRACED[Index]) == "scr_floor_end")
 	{
@@ -484,8 +499,33 @@ static void Dump(CInstance* Self)
 	Log("%s: %s", g_Dev.result.c_str(), g_Dev.dump_note.c_str());
 }
 
+// The forge's own counters, wherever the game keeps them: logged as they change.
+static void WatchForge(CInstance* Self)
+{
+	static constexpr std::array NAMES = { "forge_wave", "forge_auto_wave", "forge_auto_start_post_boss", "forge_first_wave", "forge_interwave", "forge_interwave_started",
+		"forge_active_waves", "forge_wave_rest", "forge_war_chest", "forge_show_choice_button", "ongoing_wave", "boss_wave", "wave_enemies", "menu_show", "activable_value" };
+	static std::array<std::array<std::string, NAMES.size()>, 3> last;
+	static constexpr std::array HOLDERS = { "global", "ui", "room" };
+	CInstance* room = FindInstance("obj_procedural");
+	for (size_t holder = 0; holder < 3; holder++)
+		for (size_t i = 0; i < NAMES.size(); i++)
+		{
+			if (holder == 2 && !room)
+				continue;
+			RValue value = holder == 0 ? Global(NAMES[i]) : Local(holder == 1 ? Self : room, NAMES[i]);
+			if (value.m_Kind == VALUE_UNDEFINED || value.m_Kind == VALUE_UNSET)
+				continue;
+			std::string text = Show(value, 1, 8);
+			if (text != last[holder][i])
+				Log("forge watch: %s %s %s -> %s", HOLDERS[holder], NAMES[i], last[holder][i].c_str(), text.c_str());
+			last[holder][i] = text;
+		}
+}
+
 void DevTick(CInstance* Self)
 {
+	if (g_Dev.watch)
+		WatchForge(Self);
 	g_Step++;
 	static bool key_was_down = false;
 	bool key_down = (GetAsyncKeyState(DUMP_KEY) & 0x8000) != 0;
