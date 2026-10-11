@@ -54,6 +54,8 @@ namespace
 		float loot_range = 450;
 		// A reaper picked up is unlocked at once, as the game does on a click.
 		bool reaper = true;
+		// In town, walks to Almerolis and starts the next battlefield.
+		bool restart = true;
 		// Holds the primary skill on enemies; off for a hero whose skills fire by themselves.
 		bool attack = false;
 		std::deque<LootLine> loot_log;
@@ -488,26 +490,6 @@ namespace
 	ULONGLONG g_LootSince = 0, g_LootNearAt = 0, g_LootPlanned = 0, g_PickUntil = 0;
 	constexpr double PICK = 44;
 
-	// What a thing on the ground is, the first few times one is seen: its numbers and texts.
-	void Describe(const RValue& Instance, double Id)
-	{
-		static std::map<double, bool> seen;
-		if (seen.size() >= 12 || !seen.emplace(Id, true).second)
-			return;
-		std::string all;
-		RValue names = g_Yytk->CallBuiltin("variable_instance_get_names", { Instance });
-		if (names.IsArray())
-			for (const RValue& name : names.ToVector())
-			{
-				RValue value = g_Yytk->CallBuiltin("variable_instance_get", { Instance, name });
-				if (value.m_Kind == VALUE_ARRAY || value.m_Kind == VALUE_OBJECT || value.m_Kind == VALUE_UNDEFINED || value.m_Kind == VALUE_UNSET)
-					continue;
-				all += (all.empty() ? "" : ", ") + ToText(name) + " " + ToText(value);
-			}
-		for (size_t from = 0; from < all.size(); from += 800)
-			Log("bot: loot %.0f: %s", Id, all.substr(from, 800).c_str());
-	}
-
 	// True while loot is being seen to; the breaches wait.
 	bool Loot(const Place& Me, ULONGLONG Now)
 	{
@@ -528,7 +510,6 @@ namespace
 			RValue instance = g_Yytk->CallBuiltin("instance_find", { object, RValue(static_cast<double>(i)) });
 			double id = g_Yytk->CallBuiltin("variable_instance_get", { instance, RValue("id") }).ToDouble();
 			Place at = { ToNumber(g_Yytk->CallBuiltin("variable_instance_get", { instance, RValue("x") })), ToNumber(g_Yytk->CallBuiltin("variable_instance_get", { instance, RValue("y") })) };
-			Describe(instance, id);
 			if (id == g_Loot)
 			{
 				there = true;
@@ -668,6 +649,95 @@ static void Picked(const RValue& Item)
 	Log("bot: reaper %.0f picked up", g_Reaper);
 }
 
+// Town: the result of the last expedition is closed, the hero walks to Almerolis, and the battlefield
+// is started through his menu with the calls the game makes on the clicks.
+static void Hub(CInstance* Self, CInstance* Hero, ULONGLONG Now)
+{
+	// Where Almerolis offers expeditions.
+	static constexpr Place ALMEROLIS = { 2320, 505 };
+	static ULONGLONG acted = 0;
+	static int step = 0, asked = 0;
+	static std::string seen;
+	std::string menu = ToText(Local(Self, "menu_show"));
+	bool open = ToText(Local(Self, "menu_position")) == "open";
+#ifdef SLORM_DEV
+	static bool dumped = false;
+	if (!dumped)
+	{
+		dumped = true;
+		g_Dev.dump_note = "town";
+		g_Dev.want_dump = true;
+	}
+#endif
+	if (menu != seen)
+		Log("bot: town menu %s -> %s, citizen %s", seen.c_str(), menu.c_str(), ToText(Local(Self, "menu_citizen")).c_str());
+	seen = menu;
+	if (!g_Farm.restart)
+		return Say("in town");
+	if (Now < acted + 700)
+		return;
+	auto call = [&](const char* Name, std::vector<RValue> Arguments)
+	{
+		PFUNC_YYGMLScript script = FindScript(Name);
+		if (script)
+			CallScript(script, Self, Arguments);
+		Log("bot: %s%s", Name, script ? " called" : " is not in the game");
+		acted = Now;
+	};
+	if (menu == "result")
+	{
+		if (open && ToNumber(Local(Self, "result_menu_delay_time")) >= ToNumber(Local(Self, "result_menu_delay_timer")))
+			call("scr_ui_menu_close_button", {});
+		return Say("closing the result of the last expedition");
+	}
+	if (menu == "launcher")
+	{
+		asked = 0;
+		if (!open)
+			return;
+		if (step == 0)
+		{
+			step = 1;
+			call("scr_ui_launcher_change_quest", { RValue(0.0) });
+			return Say("choosing the battlefield");
+		}
+		step = 0;
+		call("scr_run_start", {});
+		acted = Now + 3000;
+		return Say("starting the battlefield");
+	}
+	step = 0;
+	// A town entrance on the way can put up the story missions; they are closed and the walk goes on.
+	if (menu == "story")
+	{
+		if (open)
+			call("scr_ui_menu_close_button", {});
+		return Say("closing the story missions");
+	}
+	if (menu != "none")
+		return Say("a menu is open in town");
+	Place me = { ToNumber(Local(Hero, "x")), ToNumber(Local(Hero, "y")) }, npc;
+	if (!Nearest("obj_npc", ALMEROLIS, npc) || Far(npc, ALMEROLIS) > 90)
+		return Say("cannot find Almerolis");
+	// Stood below him, clear of a click on him.
+	Place stand = { npc.x, npc.y + 34 };
+	if (Far(me, stand) > 40)
+	{
+		asked = 0;
+		Go(stand, Now, 30);
+		return Say("walking to Almerolis");
+	}
+	if (Busy())
+		return;
+	if (asked >= 3)
+		return Say("Almerolis did not open the expedition menu");
+	if (asked++ == 0)
+		Log("bot: at Almerolis, he is at %.0f %.0f, the hero at %.0f %.0f", npc.x, npc.y, me.x, me.y);
+	call("scr_citizen_action", { RValue("Run Start") });
+	acted = Now + 800;
+	Say("asking Almerolis for the battlefield");
+}
+
 // The hero is walked by the game's click to move, an option of the game that can be off.
 static bool NoClickToMove()
 {
@@ -740,23 +810,26 @@ static void BotTick(CInstance* Self)
 	}
 	was_on = true;
 	CInstance* hero = FindInstance("obj_parent_hero");
-	if (!hero || RoomName() != "rm_procedural")
-	{
-		Rest();
-		g_Closed = -1;
-		g_Floor = Floor(), g_From.clear();
-		return Say("waiting for an expedition");
-	}
-	if (g_Farm.no_ctm)
+	if (hero && g_Farm.no_ctm)
 	{
 		if (Busy()) WalkStop();
 		Rest();
 		return Say("needs Click to Move turned on in the game's options");
 	}
+	if (!hero || RoomName() != "rm_procedural")
+	{
+		Rest();
+		g_Closed = -1;
+		g_Floor = Floor(), g_From.clear();
+		if (hero && RoomName() == "rm_the_hub")
+			return Hub(Self, hero, GetTickCount64());
+		return Say("waiting for an expedition");
+	}
 	std::string state = ToText(Local(hero, "actual_state"));
 	if (state == "dead")
 	{
-		g_Farm.on = false;
+		// Left on to go again from town.
+		g_Farm.on = g_Farm.restart;
 		return Say("the hero died");
 	}
 	// A floor being made or left.
@@ -990,6 +1063,7 @@ namespace
 				ImGui::TextDisabled("%s", g_Farm.status.c_str());
 				if (enabled && g_Farm.no_ctm)
 					ImGui::TextColored({ 1.0f, 0.45f, 0.35f, 1.0f }, "Click to Move is off in the game's options. The hero cannot be walked without it.");
+				changed |= ImGui::Checkbox("In town, start the next battlefield at Almerolis", &g_Farm.restart);
 				ImGui::SeparatorText("Breaches");
 				changed |= ImGui::Checkbox("Skip Breach V", &g_Farm.skip_chaos);
 				ImGui::SetNextItemWidth(90);
@@ -1022,6 +1096,14 @@ namespace
 					g_Farm.loot_log.clear();
 				ImGui::EndTabItem();
 			}
+			// The mods whose tabs sit in this one.
+			for (Feature* feature : Features())
+			{
+				if (!feature->under || std::string_view(feature->under) != tab || !ImGui::BeginTabItem(feature->tab))
+					continue;
+				changed |= DrawFeature(feature);
+				ImGui::EndTabItem();
+			}
 			if (ImGui::BeginTabItem("Settings"))
 			{
 				ImGui::SeparatorText("Loot");
@@ -1052,6 +1134,7 @@ namespace
 			else if (Name == "extra") Words >> g_Farm.extra;
 			else if (Name == "loot_range") Words >> g_Farm.loot_range;
 			else if (Name == "skip_chaos") { Words >> flag; g_Farm.skip_chaos = flag != 0; }
+			else if (Name == "restart") { Words >> flag; g_Farm.restart = flag != 0; }
 			else if (Name == "loot") { Words >> flag; g_Farm.loot = flag != 0; }
 			else if (Name == "reaper") { Words >> flag; g_Farm.reaper = flag != 0; }
 			else if (Name == "loot_show")
@@ -1064,6 +1147,7 @@ namespace
 			File << "farmer.key " << g_Farm.key << '\n'
 				<< "farmer.skip_chaos " << (g_Farm.skip_chaos ? 1 : 0) << '\n'
 				<< "farmer.extra " << g_Farm.extra << '\n'
+				<< "farmer.restart " << (g_Farm.restart ? 1 : 0) << '\n'
 				<< "farmer.loot " << (g_Farm.loot ? 1 : 0) << '\n'
 				<< "farmer.loot_range " << g_Farm.loot_range << '\n'
 				<< "farmer.reaper " << (g_Farm.reaper ? 1 : 0) << '\n'

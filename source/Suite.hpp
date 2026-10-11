@@ -45,6 +45,8 @@ struct Feature
 	const char* summary;
 	// Names its own tab in the overlay; without one it is a line of the Mods tab.
 	const char* tab = nullptr;
+	// Names the mod whose tab holds this one's tab, when it is not one of the overlay's own.
+	const char* under = nullptr;
 	bool enabled = false;
 	// Cleared by a mod whose switch another mod's tab draws; it is then left off the Mods tab.
 	bool listed = true;
@@ -71,6 +73,8 @@ struct Feature
 	virtual void Save(std::ostream& File) {}
 };
 std::vector<Feature*>& Features();
+// A mod's switch and settings, as its tab shows them.
+bool DrawFeature(Feature* feature);
 
 // The game, as the features reach it.
 extern YYTK::YYTKInterface* g_Yytk;

@@ -283,7 +283,7 @@ static bool Slider(const char* Label, float* Value, float Low, float High, const
 	return changed;
 }
 
-static bool DrawFeature(Feature* feature)
+bool DrawFeature(Feature* feature)
 {
 	ImGui::PushID(feature->key);
 	bool changed = ImGui::Checkbox(feature->name, &feature->enabled);
@@ -456,7 +456,7 @@ static void DrawWindow()
 		{
 			for (Feature* feature : Features())
 			{
-				if (!feature->tab)
+				if (!feature->tab || feature->under)
 					continue;
 				bool listed = std::find_if(std::begin(ORDER), std::end(ORDER) - 1, [&](const char* Of) { return std::string_view(Of) == feature->tab; }) != std::end(ORDER) - 1;
 				if (name ? std::string_view(name) != feature->tab : listed)
