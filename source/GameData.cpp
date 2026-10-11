@@ -1,5 +1,6 @@
 #include "Reforger.hpp"
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <sstream>
 
@@ -16,6 +17,8 @@ struct Legendary
 	// -1 any class, 0-2 one class; the game also uses 99 and 999.
 	int hero = -1;
 	bool lootable = true;
+	// Base values the roll scales (RANGE 1).
+	std::vector<double> ranged;
 };
 static std::map<int, Legendary> g_Legendaries;
 
@@ -197,6 +200,12 @@ void LoadGameData()
 			legendary.lootable = Lower(row["LOOTABLE"]) != "false" && row["LOOTABLE"] != "0";
 			try { legendary.hero = std::stoi(row["HERO"]); }
 			catch (...) {}
+			std::stringstream values(row["VALUE"]), ranges(row["RANGE"]);
+			for (std::string value, range; std::getline(values, value, '|') && std::getline(ranges, range, '|');)
+			{
+				try { if (std::stod(range) == 1) legendary.ranged.push_back(std::stod(value)); }
+				catch (...) {}
+			}
 			g_Legendaries[std::stoi(row["REF"])] = legendary;
 		}
 		catch (...) {}
@@ -223,6 +232,27 @@ const StatInfo* FindStat(const std::string& Ref)
 	for (const StatInfo& stat : g_Stats)
 		if (stat.ref == Ref) return &stat;
 	return nullptr;
+}
+
+// What the game shows for a base value at a roll, before reinforcement: banker's rounding, whole and at least 1.
+static double LegendaryShown(double Value, double Roll)
+{
+	double scaled = std::round(Value * Roll / 100 * 1e6) / 1e6;
+	// The game keeps a decimal for these two.
+	if (Value == 2.5 || Value == 0.6)
+		return std::nearbyint(scaled * 10) / 10;
+	return (std::max)(1.0, std::nearbyint(scaled));
+}
+
+bool LegendaryGains(int Id, double From, double To)
+{
+	auto found = g_Legendaries.find(Id);
+	// Unknown legendary: assume the roll counts.
+	if (found == g_Legendaries.end())
+		return true;
+	for (double value : found->second.ranged)
+		if (LegendaryShown(value, To) != LegendaryShown(value, From)) return true;
+	return false;
 }
 
 std::string LegendaryName(int Id)

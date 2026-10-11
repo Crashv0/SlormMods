@@ -214,6 +214,8 @@ void LoadGameData();
 const StatInfo* FindStat(const std::string& Ref);
 std::string StatName(const std::string& Ref, int Hero = -1);
 std::string LegendaryName(int Id);
+// Whether any shown value of the legendary differs between two rolls; small values round to the same number.
+bool LegendaryGains(int Id, double From, double To);
 
 bool OverlayInstall(YYTK::YYTKInterface* Yytk);
 bool OverlayWantsMouse();

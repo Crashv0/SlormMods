@@ -406,7 +406,14 @@ static bool Met(const Target& Target, const Affix& Affix)
 	if (IsLegendaryTier(Target.tier) && Target.stat == g_FixedLegendary)
 		return true;
 	if (IsSpecialTier(Target.tier) || IsLegendaryTier(Target.tier))
-		return Target.goal == Goal::Any || Affix.roll >= (Target.goal == Goal::MaxRoll ? MaxRoll(Target.tier, Target.stat) : Target.amount);
+	{
+		double wanted = Target.goal == Goal::MaxRoll ? MaxRoll(Target.tier, Target.stat) : Target.amount;
+		if (Target.goal == Goal::Any || Affix.roll >= wanted)
+			return true;
+		// A higher roll that shows the same values is not worth a reroll.
+		try { return IsLegendaryTier(Target.tier) && !LegendaryGains(std::stoi(Target.stat.substr(4)), Affix.roll, wanted); }
+		catch (...) { return false; }
+	}
 	switch (Target.goal)
 	{
 	case Goal::Any: return true;
