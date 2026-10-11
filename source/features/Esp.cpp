@@ -411,8 +411,15 @@ namespace
 				touch();
 				if (Tip) tip(Tip);
 			};
+			// The map mod's switch lives here.
+			for (Feature* feature : Features())
+				if (std::string_view(feature->key) == "maphack")
+				{
+					changed |= ImGui::Checkbox(feature->name, &feature->enabled);
+					tip(feature->summary);
+				}
 			if (!ImGui::BeginTabBar("esp"))
-				return false;
+				return changed;
 
 			if (ImGui::BeginTabItem("Breaches"))
 			{
