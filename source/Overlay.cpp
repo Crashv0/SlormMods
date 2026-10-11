@@ -261,7 +261,7 @@ static bool DrawMods()
 {
 	bool changed = false;
 	for (Feature* feature : Features())
-		if (!feature->tab) changed |= DrawFeature(feature);
+		if (!feature->tab && feature->listed) changed |= DrawFeature(feature);
 	return changed;
 }
 

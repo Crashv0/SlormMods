@@ -102,7 +102,11 @@ static void Tick(CInstance* Self)
 	key_was_down = key_down;
 
 	for (Feature* feature : Features())
+	{
 		if (feature->enabled) feature->Tick(Self);
+		else if (feature->was_enabled) feature->Off(Self);
+		feature->was_enabled = feature->enabled;
+	}
 #ifdef SLORM_DEV
 	DevTick(Self);
 #endif

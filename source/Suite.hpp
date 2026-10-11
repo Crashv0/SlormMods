@@ -46,6 +46,8 @@ struct Feature
 	// Names its own tab in the overlay; without one it is a line of the Mods tab.
 	const char* tab = nullptr;
 	bool enabled = false;
+	// Cleared by a mod whose switch another mod's tab draws; it is then left off the Mods tab.
+	bool listed = true;
 
 	Feature(const char* Name, const char* Key, const char* Summary);
 	virtual ~Feature() = default;
@@ -53,6 +55,9 @@ struct Feature
 	virtual void Start() {}
 	// Each step of the game's UI object while enabled.
 	virtual void Tick(YYTK::CInstance* Self) {}
+	// Once on the step after it is turned off, to put back what it changed in the game.
+	virtual void Off(YYTK::CInstance* Self) {}
+	bool was_enabled = false;
 	// Its settings in the overlay, shown while enabled or in its own tab; true when something to save changed.
 	virtual bool Draw() { return false; }
 	// Set by a feature with looks to choose: it gets a tab of its own under Options, drawn by this.
