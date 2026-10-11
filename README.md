@@ -11,6 +11,13 @@ On the Mods tab. Walking up to the Mage Academy entrance starts the Bastion with
 - **Auto exit** takes the exit key and the portal when you reach them; holding a key (Left Ctrl) keeps you in to pick up loot.
 - **Skip the result screen** closes it as soon as the game allows.
 
+### Auto open chests
+
+On the Mods tab. Uses a chest when the hero is close enough to do it by hand.
+
+- **Chests** on expeditions are opened, then searched.
+- **War Chest** in the Great Forge is opened and emptied, once per visit.
+
 ### Auto pick Great Forge paths
 
 On the Forge tab. When "Choose your Path" opens, the mod takes the path that stands highest in your priority lists.
