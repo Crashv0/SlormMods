@@ -531,8 +531,8 @@ Mark GearSpecialMark(const BuildItem& Item, const char* Tier, int Id, int Value,
 		for (const LiveAffix& held : live->affixes)
 			if (held.tier == Tier && held.id == Id)
 			{
-				// A legendary with no range has nothing to roll.
-				bool fixed = std::string_view(Tier) == "L" && !LegendaryHasRange(Id);
+				// A legendary with no range, or one whose roll shows the same values, has nothing to gain.
+				bool fixed = std::string_view(Tier) == "L" && (!LegendaryHasRange(Id) || !LegendaryGains(Id, held.roll, Value));
 				if (fixed || held.roll >= Value)
 					return Mark::Match;
 				Note = "at " + Number(held.roll) + " of " + std::to_string(Value);

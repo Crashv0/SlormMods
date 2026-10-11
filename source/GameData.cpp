@@ -1,5 +1,6 @@
 #include "Hud.hpp"
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <sstream>
 
@@ -18,7 +19,8 @@ struct SkillInfo
 static std::map<int, SkillInfo> g_Skills[3];
 static std::map<int, std::string> g_Smiths, g_Traits, g_Ultimatums, g_Weapons;
 static std::map<int, int> g_LegacyRealms, g_ReaperOrders;
-static std::map<int, bool> g_LegendaryRanges;
+// Base values the roll scales (RANGE 1), per legendary.
+static std::map<int, std::vector<double>> g_LegendaryRanges;
 static std::map<int, std::string> g_Legacies, g_Reapers, g_Runes, g_Activables, g_Legendaries;
 
 using Row = std::map<std::string, std::string>;
@@ -229,7 +231,17 @@ void LoadGameData()
 	LoadNames(game / "dat_leg.json", "EN_NAME", g_Legendaries);
 	// RANGE holds a flag per value, as "0|1|0".
 	for (Row& row : LoadTable(game / "dat_leg.json"))
-		if (ToInt(row["REF"]) >= 0) g_LegendaryRanges[ToInt(row["REF"])] = row["RANGE"].find('1') != std::string::npos;
+	{
+		if (ToInt(row["REF"]) < 0)
+			continue;
+		std::vector<double>& ranged = g_LegendaryRanges[ToInt(row["REF"])];
+		std::stringstream values(row["VALUE"]), ranges(row["RANGE"]);
+		for (std::string value, range; std::getline(values, value, '|') && std::getline(ranges, range, '|');)
+		{
+			try { if (std::stod(range) == 1) ranged.push_back(std::stod(value)); }
+			catch (...) {}
+		}
+	}
 
 	g_Stats.clear();
 	for (Row& row : LoadTable(game / "dat_sta.json"))
@@ -320,7 +332,27 @@ std::string UltimatumName(int Id) { return NameIn(g_Ultimatums, Id, "ultimatum")
 bool LegendaryHasRange(int Id)
 {
 	auto found = g_LegendaryRanges.find(Id);
-	return found == g_LegendaryRanges.end() || found->second;
+	return found == g_LegendaryRanges.end() || !found->second.empty();
+}
+
+// What the game shows for a base value at a roll, before reinforcement: banker's rounding, whole and at least 1.
+static double LegendaryShown(double Value, double Roll)
+{
+	double scaled = std::round(Value * Roll / 100 * 1e6) / 1e6;
+	// The game keeps a decimal for these two.
+	if (Value == 2.5 || Value == 0.6)
+		return std::nearbyint(scaled * 10) / 10;
+	return (std::max)(1.0, std::nearbyint(scaled));
+}
+
+bool LegendaryGains(int Id, double From, double To)
+{
+	auto found = g_LegendaryRanges.find(Id);
+	if (found == g_LegendaryRanges.end())
+		return true;
+	for (double value : found->second)
+		if (LegendaryShown(value, To) != LegendaryShown(value, From)) return true;
+	return false;
 }
 
 int ReaperOrder(int Id)

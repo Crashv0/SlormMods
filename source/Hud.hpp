@@ -289,6 +289,8 @@ std::string SmithName(int Id);
 std::string LegendaryName(int Id);
 // Whether any of the legendary's values rolls in a range; the rest are fixed whatever the item's roll says.
 bool LegendaryHasRange(int Id);
+// Whether any shown value of the legendary differs between two rolls; small values round to the same number.
+bool LegendaryGains(int Id, double From, double To);
 std::string UltimatumName(int Id);
 
 bool OverlayInstall(YYTK::YYTKInterface* Yytk);
