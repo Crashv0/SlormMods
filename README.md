@@ -60,6 +60,10 @@ The build's reaper is framed in the collection, even before you own it.
 
 </details>
 
+### Netherworld search
+
+On the Nether tab, add rules such as "at least 2 Ring" or "at least 3 Any slot". Every warlord on the Netherworld map whose possible rewards hold that many legendaries of the slot gets the count written under it, such as `2 Ring`, and the tab lists them by name with their rewards. It needs no build.
+
 ### Builds
 
 Paste a share link on the Imports tab. Several builds can be kept; the selected one is drawn. The Build tab lists the whole build with the same colors and what is missing on each line.
@@ -73,7 +77,7 @@ Paste a share link on the Imports tab. Several builds can be kept; the selected 
 
 ### Options
 
-Thickness, size and position of every kind of outline, where the rank text sits, the four colors, themes, and two hotkeys. A right click or double click on a slider resets it.
+Thickness, size and position of every kind of outline, where the rank and Netherworld text sits, the colors, themes, and two hotkeys. A right click or double click on a slider resets it.
 
 <details>
 <summary>Screenshots</summary>
@@ -103,7 +107,7 @@ To uninstall, delete `version.dll`, `SlormHUD-README.txt`, `aurie.log` and the `
 2. Play a character of the build's class. Open the ancestral legacy map, the skill screen or the inventory, and the build is drawn on it.
 3. Work toward green. The Build tab lists the same comparison, section by section.
 
-F4 shows or hides the outlines on the game's screens. Both keys can be changed on the Options tab.
+F4 shows or hides the outlines and the Netherworld text on the game's screens. Both keys can be changed on the Options tab.
 
 Mastery levels, reaper and rune levels, item level, reinforcement and pure stats are not compared.
 

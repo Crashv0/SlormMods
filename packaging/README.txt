@@ -26,6 +26,11 @@ USE
   Green matches the build, orange is partly there, magenta is still to
   place, red is not in the build.
 
+  To find warlords by their rewards, add a rule on the Nether tab, such
+  as "at least 2 Ring", and open the Netherworld: each warlord that can
+  reward that many legendaries of the slot has the count written under
+  it. No build is needed for this.
+
 UNINSTALL
   Delete these from the game folder:
     version.dll
