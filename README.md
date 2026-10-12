@@ -15,9 +15,20 @@ On the Macros tab. Presses skills for the hero by rules; the game still applies 
 - **Pause key.** F5 pauses and resumes every macro. Nothing is pressed in town or in a menu.
 - **Save and share.** Saved by name, and exported or imported as one line of text.
 
+### Farm
+
+On the Farm tab. Plays expeditions for the hero, start to finish, and goes again from town. Needs Click to Move turned on in the game's options, and suits a build whose skills fire by themselves.
+
+- **Run the expedition.** Switched by the tick box or a key (Home).
+- **From town.** Walks to Almerolis and starts the chosen expedition, on the level the launcher was left on. Battlefield and The Great Forge so far.
+- **Battlefield.** Closes breaches by the shortest way round on foot, opens the portal once enough are closed, and takes it. Breach V can be skipped.
+- **The Great Forge.** Starts each wave, fights to the wave you set, opens the War Chest, picks up what it held and heads home. Needs "Auto pick Great Forge paths" on. The hero can hold the center of the room.
+- **Loot.** Picks up what drops within a range. A log lists it, reapers by name, with a switch for each kind of item.
+- **Limits.** Stop after a number of expeditions, head home after a number of Battlefield floors, and stop when the bag is full.
+
 ### Auto pick Great Forge paths
 
-On the Forge tab. When "Choose your Path" opens, the mod takes the path that stands highest in your priority lists.
+On the Farm tab, under Forge. When "Choose your Path" opens, the mod takes the path that stands highest in your priority lists.
 
 - **Priority lists.** Rewards and challenges in lists, and lists inside lists, reordered by dragging. Higher lines win.
 - **Want or avoid.** An avoided entry rules out its paths for every line below it.
@@ -42,6 +53,10 @@ On the Mods tab. Uses a chest when the hero is close enough to do it by hand.
 
 - **Chests** on expeditions are opened, then searched.
 - **War Chest** in the Great Forge is opened and emptied, once per visit.
+
+### Auto unlock reaper drops
+
+On the Mods tab. A reaper picked up is unlocked at once, without opening the character screen, and its screen is clicked away.
 
 ### Auto enter Temppopotamus' Bastion
 
