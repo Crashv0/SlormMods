@@ -652,7 +652,7 @@ namespace
 			"Each wave, takes the path offering what stands highest in your lists.\nWhen none of the three is listed, takes one at random.")
 		{
 			tab = "Forge";
-			under = "Farmer";
+			under = "Farm";
 			appearance = true;
 			root.children.push_back(List("Loot", { 1061, 1051, 1010 }));
 			root.children.push_back(List("Spirits", { 1000, 1001, 1002, 1003, 1004, 1005, 1006 }));

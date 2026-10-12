@@ -52,8 +52,6 @@ namespace
 		// Loot lying within this of the hero, on foot, is walked to and picked up between breaches.
 		bool loot = true;
 		float loot_range = 450;
-		// A reaper picked up is unlocked at once, as the game does on a click.
-		bool reaper = true;
 		// In town, walks to Almerolis and starts the next battlefield.
 		bool restart = true;
 		// What is started from town: the battlefield, or the Great Forge.
@@ -62,6 +60,17 @@ namespace
 		int forge_waves = 10;
 		// In the Great Forge the hero holds the middle and lets the enemies come.
 		bool forge_center = true;
+		// Limits, 0 for none: expeditions started before the Farmer stops in town, and battlefield
+		// floors played before the door is taken home.
+		int max_runs = 0, max_floors = 0;
+		// A full bag sends the hero home at the next door and stops the Farmer in town.
+		bool stop_full = true;
+		// Expeditions started since it was switched on, floors seen in this one.
+		int runs = 0, floors = 0;
+		// Why it switched itself off; shown in place of "off".
+		std::string stopped;
+		// Bag slots taken and had, -1 until read.
+		int bag_used = -1, bag_slots = 0;
 		// Holds the primary skill on enemies; off for a hero whose skills fire by themselves.
 		bool attack = false;
 		std::deque<LootLine> loot_log;
@@ -71,6 +80,8 @@ namespace
 		int loot_count = 0;
 	} g_Farm;
 	Feature* g_Mod = nullptr;
+	// The mod that unlocks reapers as they are picked up.
+	Feature* g_Unlock = nullptr;
 
 	struct Place { double x = 0, y = 0; };
 	struct Breach
@@ -223,16 +234,18 @@ namespace
 	// to stay there. So the hero is stood below, the mouse is put on it and kept there, and once the
 	// game offers it, it is clicked. Where on it the mouse has to be is tried out.
 	// On the door the mouse stays above the middle: there it is the next floor, below it the way home.
-	void Exit(CInstance* Self, const Place& At, bool Door, const Place& Me, ULONGLONG Now)
+	// Door: 0 what is left of a breach, 1 the door to the next floor, 2 the door home.
+	void Exit(CInstance* Self, const Place& At, int Door, const Place& Me, ULONGLONG Now)
 	{
-		static constexpr double RESIDUE[] = { 8, 16, 0, 24 }, DOOR[] = { -8, -12, -5, -16 };
-		const double* TRIES = Door ? DOOR : RESIDUE;
+		// The door goes on with the mouse above its middle and home with it below.
+		static constexpr double RESIDUE[] = { 8, 16, 0, 24 }, DOOR[] = { -8, -12, -5, -16 }, HOME[] = { 8, 12, 5, 16 };
+		const double* TRIES = Door == 2 ? HOME : Door ? DOOR : RESIDUE;
 		static long long key = 0;
 		static ULONGLONG staged_at = 0, tried_at = 0, clicked_at = 0;
 		static int tried = 0;
 		static std::string said;
 		// Once below it, the hero is left to walk up for a while before it is stood below again.
-		long long this_key = Key(At) * 2 + (Door ? 1 : 0);
+		long long this_key = Key(At) * 3 + Door;
 		bool staged = key == this_key && Now - staged_at < 8000;
 		if (!staged)
 		{
@@ -652,7 +665,7 @@ static void Picked(const RValue& Item)
 	int shown = 6;
 	for (int i = 0; i < 6; i++)
 		if (what == SHOWN[i]) shown = i;
-	if (g_Farm.loot_show[shown])
+	if (g_Mod && g_Mod->enabled && g_Farm.loot_show[shown])
 	{
 		std::lock_guard guard(g_Lock);
 		std::deque<LootLine>& log = g_Farm.loot_log;
@@ -664,7 +677,7 @@ static void Picked(const RValue& Item)
 		if (log.size() > 60)
 			log.pop_front();
 	}
-	if (what != "weapon")
+	if (what != "weapon" || !g_Unlock || !g_Unlock->enabled)
 		return;
 	g_Reaper = ToNumber(head[1]);
 	g_ReaperAt = GetTickCount64();
@@ -911,6 +924,37 @@ static void GreatForge(CInstance* Self, CInstance* Hero, ULONGLONG Now)
 	Say(text);
 }
 
+// The bag is the hero's inventory after the eleven things worn; a slot holding something is an array.
+static void ReadBag()
+{
+	static ULONGLONG read = 0;
+	if (GetTickCount64() - read < 1000)
+		return;
+	read = GetTickCount64();
+	g_Farm.bag_used = -1;
+	RValue heroes = Global("inventory");
+	int who = static_cast<int>(ToNumber(Global("current_hero"))), slots = static_cast<int>(ToNumber(Global("inventory_slots")));
+	if (!heroes.IsArray() || who < 0 || slots < 1 || slots > 400 || ToNumber(g_Yytk->CallBuiltin("array_length", { heroes })) <= who)
+		return;
+	RValue bag = g_Yytk->CallBuiltin("array_get", { heroes, RValue(static_cast<double>(who)) });
+	if (!bag.IsArray() || ToNumber(g_Yytk->CallBuiltin("array_length", { bag })) < 11 + slots)
+		return;
+	int used = 0;
+	for (int slot = 0; slot < slots; slot++)
+		used += g_Yytk->CallBuiltin("array_get", { bag, RValue(11.0 + slot) }).IsArray() ? 1 : 0;
+	static int logged = -1;
+	if (used != logged)
+		Log("bot: bag %d of %d", used, slots);
+	logged = used;
+	g_Farm.bag_used = used;
+	g_Farm.bag_slots = slots;
+}
+
+static bool BagFull()
+{
+	return g_Farm.stop_full && g_Farm.bag_used >= 0 && g_Farm.bag_used >= g_Farm.bag_slots;
+}
+
 // Town: the result of the last expedition is closed, the hero walks to Almerolis, and the battlefield
 // is started through his menu with the calls the game makes on the clicks.
 static void Hub(CInstance* Self, CInstance* Hero, ULONGLONG Now)
@@ -966,6 +1010,8 @@ static void Hub(CInstance* Self, CInstance* Hero, ULONGLONG Now)
 		}
 		step = 0;
 		call("scr_run_start", {});
+		g_Farm.runs++;
+		Log("bot: expedition %d started", g_Farm.runs);
 		acted = Now + 3000;
 		return Say("starting the expedition");
 	}
@@ -988,6 +1034,17 @@ static void Hub(CInstance* Self, CInstance* Hero, ULONGLONG Now)
 	// A War Chest brought home full is emptied first, and what it held picked up.
 	if (WarChest(Self, me, Now) || ChestLoot(me, Now))
 		return;
+	char why[96] = "";
+	if (g_Farm.max_runs > 0 && g_Farm.runs >= g_Farm.max_runs)
+		snprintf(why, sizeof(why), "stopped: %d expedition%s done", g_Farm.runs, g_Farm.runs == 1 ? "" : "s");
+	else if (BagFull())
+		snprintf(why, sizeof(why), "stopped: the bag is full, %d of %d", g_Farm.bag_used, g_Farm.bag_slots);
+	if (why[0])
+	{
+		g_Farm.stopped = why;
+		g_Farm.on = false;
+		return;
+	}
 	if (!Nearest("obj_npc", ALMEROLIS, npc) || Far(npc, ALMEROLIS) > 90)
 		return Say("cannot find Almerolis");
 	// Stood below him, clear of a click on him.
@@ -1020,19 +1077,19 @@ static PFUNC_YYGMLScript g_PickUp = nullptr;
 static RValue& PickUpHook(CInstance* Self, CInstance* Other, RValue& Result, int ArgumentCount, RValue** Arguments)
 {
 	RValue& result = g_PickUp(Self, Other, Result, ArgumentCount, Arguments);
-	if (g_Mod && g_Mod->enabled && ArgumentCount > 0 && Arguments[0])
+	if (((g_Mod && g_Mod->enabled) || (g_Unlock && g_Unlock->enabled)) && ArgumentCount > 0 && Arguments[0])
 		Picked(*Arguments[0]);
 	return result;
 }
 
-static void BotTick(CInstance* Self)
+static void ReaperTick(CInstance* Self)
 {
 	// The game unlocks a new reaper on a click, with this call; it is made a moment after the pick up.
 	if (g_Reaper >= 0 && GetTickCount64() - g_ReaperAt > 600)
 	{
 		double reaper = g_Reaper;
 		g_Reaper = -1;
-		PFUNC_YYGMLScript unlock = g_Farm.reaper ? FindScript("scr_weapon_pre_evolve") : nullptr;
+		PFUNC_YYGMLScript unlock = FindScript("scr_weapon_pre_evolve");
 		if (unlock)
 		{
 			CallScript(unlock, Self, { RValue(reaper), RValue(1.0) });
@@ -1058,6 +1115,10 @@ static void BotTick(CInstance* Self)
 		if (g_Clicks >= 4)
 			g_UnlockedAt = 0;
 	}
+}
+
+static void BotTick(CInstance* Self)
+{
 	static bool was_on = false, key_was_down = false;
 	bool key_down = !g_SuppressToggle && (GetAsyncKeyState(g_Farm.key) & 0x8000) != 0;
 	if (key_down && !key_was_down)
@@ -1074,10 +1135,15 @@ static void BotTick(CInstance* Self)
 			g_Skip.clear();
 			g_NoLoot.clear();
 			g_Loot = 0;
-			Say("off");
+			Say(g_Farm.stopped.empty() ? "off" : g_Farm.stopped);
 		}
 		was_on = false;
 		return;
+	}
+	if (!was_on)
+	{
+		g_Farm.runs = g_Farm.floors = 0;
+		g_Farm.stopped.clear();
 	}
 	was_on = true;
 	CInstance* hero = FindInstance("obj_parent_hero");
@@ -1093,6 +1159,7 @@ static void BotTick(CInstance* Self)
 		g_Closed = -1;
 		g_Floor = Floor(), g_From.clear();
 		g_InForge = false;
+		g_Farm.floors = 0;
 		if (hero && RoomName() == "rm_the_hub")
 			return Hub(Self, hero, GetTickCount64());
 		return Say("waiting for an expedition");
@@ -1142,6 +1209,13 @@ static void BotTick(CInstance* Self)
 				all += place;
 			}
 			Log("bot: breaches %s", all.c_str());
+			// A floor not seen before is one more of this expedition.
+			static long long last = 0;
+			long long floor = total;
+			for (const Breach& breach : breaches) floor += Key(breach.at);
+			if (total > 0 && (floor != last || g_Farm.floors < 1))
+				Log("bot: floor %d of this expedition", ++g_Farm.floors);
+			last = floor;
 		}
 		// What is there to open the door with, the first time it can be opened.
 		if (g_Closed >= 0 && g_Closed < needed && closed >= needed)
@@ -1170,9 +1244,10 @@ static void BotTick(CInstance* Self)
 	if (Nearest("obj_breach_door", me, exit))
 	{
 		Rest();
-		snprintf(text, sizeof(text), "taking the door at %.0f %.0f", exit.x, exit.y);
+		bool home = BagFull() || (g_Farm.max_floors > 0 && g_Farm.floors >= g_Farm.max_floors);
+		snprintf(text, sizeof(text), "taking the door %s at %.0f %.0f", home ? (BagFull() ? "home with a full bag" : "home") : "to the next floor", exit.x, exit.y);
 		Say(text);
-		Exit(Self, exit, true, me, now);
+		Exit(Self, exit, home ? 2 : 1, me, now);
 		return;
 	}
 
@@ -1225,7 +1300,7 @@ static void BotTick(CInstance* Self)
 			g_Attack = false;
 			snprintf(text, sizeof(text), "opening the door at %.0f %.0f", exit.x, exit.y);
 			Say(text);
-			Exit(Self, exit, false, me, now);
+			Exit(Self, exit, 0, me, now);
 			return;
 		}
 		if (!best)
@@ -1305,9 +1380,9 @@ namespace
 {
 	struct Farmer : Feature
 	{
-		Farmer() : Feature("Farmer", "farmer", "Plays expedition floors for the hero: closes breaches by the shortest way round, picks up what drops, unlocks reapers, then opens the portal and takes it to the next floor.")
+		Farmer() : Feature("Farm", "farmer", "Plays expedition floors for the hero: closes breaches by the shortest way round, picks up what drops, then opens the portal and takes it to the next floor.")
 		{
-			tab = "Farmer";
+			tab = "Farm";
 			g_Mod = this;
 		}
 
@@ -1321,6 +1396,7 @@ namespace
 		void Tick(CInstance* Self) override
 		{
 			g_Farm.no_ctm = NoClickToMove();
+			ReadBag();
 			BotTick(Self);
 		}
 
@@ -1371,6 +1447,30 @@ namespace
 				if (ImGui::IsItemHovered())
 					ImGui::SetTooltip("The hero holds the center of the forge and lets the enemies come.\nOff, it walks at the nearest ones.");
 				ImGui::Unindent();
+			}
+			else
+			{
+				ImGui::Indent();
+				ImGui::SetNextItemWidth(160 * g_Appearance.scale);
+				changed |= ImGui::SliderInt("Head home after this many floors (0 = keep going)", &g_Farm.max_floors, 0, 100, "%d", ImGuiSliderFlags_AlwaysClamp);
+				if (ImGui::IsItemHovered())
+					ImGui::SetTooltip("Floors are counted from where Farm was switched on.");
+				ImGui::Unindent();
+			}
+			ImGui::SetNextItemWidth(160 * g_Appearance.scale);
+			changed |= ImGui::SliderInt("Stop after this many expeditions (0 = no limit)", &g_Farm.max_runs, 0, 100, "%d", ImGuiSliderFlags_AlwaysClamp);
+			if (g_Farm.on && g_Farm.max_runs > 0)
+			{
+				ImGui::SameLine();
+				ImGui::TextDisabled("%d started", g_Farm.runs);
+			}
+			changed |= ImGui::Checkbox("Stop when the bag is full", &g_Farm.stop_full);
+			if (ImGui::IsItemHovered())
+				ImGui::SetTooltip("On the Battlefield the hero takes the next door home.\nIn town it stops instead of starting again.");
+			if (g_Farm.bag_used >= 0)
+			{
+				ImGui::SameLine();
+				ImGui::TextDisabled("%d of %d", g_Farm.bag_used, g_Farm.bag_slots);
 			}
 			if (!ImGui::BeginTabBar("farmer"))
 				return changed;
@@ -1423,7 +1523,6 @@ namespace
 				ImGui::SameLine();
 				ImGui::SetNextItemWidth(90);
 				changed |= ImGui::InputFloat("##lootrange", &g_Farm.loot_range, 0, 0, "%.0f");
-				changed |= ImGui::Checkbox("Unlock a picked up reaper at once (also when not running the floor)", &g_Farm.reaper);
 				ImGui::SeparatorText("Loot log");
 				ImGui::TextDisabled("Listed when picked up:");
 				static const char* const SHOWN[] = { "Reapers", "Gear", "Fragments", "Slormites", "Slormelines", "Slormandrites", "Anything else" };
@@ -1449,9 +1548,13 @@ namespace
 			else if (Name == "mode") { Words >> g_Farm.mode; g_Farm.mode = g_Farm.mode == 1 ? 1 : 0; }
 			else if (Name == "forge_waves") { Words >> g_Farm.forge_waves; g_Farm.forge_waves = (std::min)((std::max)(g_Farm.forge_waves, 1), 100); }
 			else if (Name == "forge_center") { Words >> flag; g_Farm.forge_center = flag != 0; }
+			else if (Name == "max_runs") { Words >> g_Farm.max_runs; g_Farm.max_runs = (std::min)((std::max)(g_Farm.max_runs, 0), 100); }
+			else if (Name == "max_floors") { Words >> g_Farm.max_floors; g_Farm.max_floors = (std::min)((std::max)(g_Farm.max_floors, 0), 100); }
+			else if (Name == "stop_full") { Words >> flag; g_Farm.stop_full = flag != 0; }
 			else if (Name == "restart") { Words >> flag; g_Farm.restart = flag != 0; }
 			else if (Name == "loot") { Words >> flag; g_Farm.loot = flag != 0; }
-			else if (Name == "reaper") { Words >> flag; g_Farm.reaper = flag != 0; }
+			// Once a setting of this mod, now a mod of its own.
+			else if (Name == "reaper") { Words >> flag; if (flag && g_Unlock) g_Unlock->enabled = true; }
 			else if (Name == "loot_show")
 				for (bool& show : g_Farm.loot_show)
 					if (Words >> flag) show = flag != 0;
@@ -1466,13 +1569,25 @@ namespace
 				<< "farmer.mode " << g_Farm.mode << '\n'
 				<< "farmer.forge_waves " << g_Farm.forge_waves << '\n'
 				<< "farmer.forge_center " << (g_Farm.forge_center ? 1 : 0) << '\n'
+				<< "farmer.max_runs " << g_Farm.max_runs << '\n'
+				<< "farmer.max_floors " << g_Farm.max_floors << '\n'
+				<< "farmer.stop_full " << (g_Farm.stop_full ? 1 : 0) << '\n'
 				<< "farmer.loot " << (g_Farm.loot ? 1 : 0) << '\n'
 				<< "farmer.loot_range " << g_Farm.loot_range << '\n'
-				<< "farmer.reaper " << (g_Farm.reaper ? 1 : 0) << '\n'
 				<< "farmer.loot_show";
 			for (bool show : g_Farm.loot_show)
 				File << ' ' << (show ? 1 : 0);
 			File << '\n';
 		}
 	} g_Farmer;
+
+	struct ReaperUnlock : Feature
+	{
+		ReaperUnlock() : Feature("Auto unlock reaper drops", "reaper_unlock", "A reaper picked up is unlocked at once, without opening the character screen, and its screen is clicked away.")
+		{
+			g_Unlock = this;
+		}
+
+		void Tick(CInstance* Self) override { ReaperTick(Self); }
+	} g_ReaperUnlock;
 }
