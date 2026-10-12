@@ -451,7 +451,7 @@ static void DrawWindow()
 			ImGui::EndTabItem();
 		}
 		// The mods' tabs in a set order, then any other.
-		static const char* const ORDER[] = { "Macros", "ESP", "Farm", "Forge", nullptr };
+		static const char* const ORDER[] = { "ESP", "Macros", "Farm", "Forge", nullptr };
 		for (const char* name : ORDER)
 		{
 			for (Feature* feature : Features())

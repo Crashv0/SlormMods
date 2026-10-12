@@ -10,7 +10,7 @@ On the Macros tab. Presses skills for the hero by rules; the game still applies 
 
 - **Priority.** Macros are tried from the top, and a higher one that can start takes over from a lower one.
 - **Trigger.** Automatic, while a key is held, or switched by a key, with an option for standing still or moving and a wait between uses.
-- **Conditions.** A tree of all of / any of / none of over life, mana, cooldowns, casting, in combat, enemies within a range and time since the macro fired, each with its live value.
+- **Conditions.** A tree of all of / any of / none of over life, mana, cooldowns, casting, in combat, enemies within a range, buffs on the hero (an aura that is on counts as one) and time since the macro fired, each with its live value.
 - **Steps.** Press a skill or aura (tap or hold), wait, or wait until conditions hold.
 - **Pause key.** F5 pauses and resumes every macro. Nothing is pressed in town or in a menu.
 - **Save and share.** Saved by name, and exported or imported as one line of text.

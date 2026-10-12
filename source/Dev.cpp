@@ -426,6 +426,7 @@ static void DumpGrid(std::ofstream& File, const std::string& Name, const RValue&
 		File << entry.first << " = " << value << "  x" << entry.second << '\n';
 }
 
+static std::string ShowList(const RValue& Id, int Depth, size_t Limit);
 static void Dump(CInstance* Self)
 {
 	std::ofstream file(fs::path(g_Folder) / "SlormSuite.dump.txt", g_DumpCount ? std::ios::app : std::ios::trunc);
@@ -482,6 +483,21 @@ static void Dump(CInstance* Self)
 	// -5 is GML's "global".
 	DumpNames(file, g_Yytk->CallBuiltin("variable_instance_get_names", { RValue(-5.0) }),
 		[](const std::string& Name) { return Global(Name.c_str()); });
+	// Buffs and auras: what the hero holds, and the game's tables of them.
+	file << "--- buffs ---\n";
+	if (hero)
+		for (const char* name : { "buff_list", "buff_list_simplified", "buff_list_effect_simplified" })
+			file << "hero " << name << " = " << ShowList(Local(hero, name), 3, 60) << '\n';
+	file << "aura_array = " << Show(Global("aura_array"), 3, 60) << '\n';
+	for (const char* name : { "actives", "buffs" })
+	{
+		RValue table = Global(name);
+		if (!table.IsArray())
+			continue;
+		std::vector<RValue> rows = table.ToVector();
+		for (size_t i = 0; i < rows.size(); i++)
+			file << name << "[" << i << "] = " << Show(rows[i], 1, 40).substr(0, 700) << '\n';
+	}
 	file << "--- obj_ui_next_gen ---\n";
 	DumpNames(file, g_Yytk->CallBuiltin("variable_instance_get_names", { RValue(Self) }),
 		[&](const std::string& Name) { return Local(Self, Name.c_str()); });
@@ -575,9 +591,51 @@ static void WatchLegacy()
 	for (size_t i = 0; i < now.size(); i++) last[i] = ToNumber(now[i]);
 }
 
+// A list of the game's, by its id.
+static std::string ShowList(const RValue& Id, int Depth, size_t Limit)
+{
+	if (!Id.IsNumberConvertible() || ToNumber(g_Yytk->CallBuiltin("ds_exists", { Id, RValue(2.0) })) <= 0)
+		return "no list";
+	int size = static_cast<int>(ToNumber(g_Yytk->CallBuiltin("ds_list_size", { Id })));
+	std::string out = "[" + std::to_string(size) + "]";
+	for (int i = 0; i < size && i < 60; i++)
+		out += " " + Show(g_Yytk->CallBuiltin("ds_list_find_value", { Id, RValue(static_cast<double>(i)) }), Depth, Limit) + ";";
+	return out;
+}
+
+// The hero's buffs and aura variables, logged as they change.
+static void WatchBuffs()
+{
+	static ULONGLONG read = 0;
+	if (GetTickCount64() - read < 250)
+		return;
+	read = GetTickCount64();
+	CInstance* hero = FindInstance("obj_parent_hero");
+	if (!hero)
+		return;
+	static std::string last[6];
+	const char* lists[] = { "buff_list_simplified", "buff_list_effect_simplified" };
+	for (int i = 0; i < 2; i++)
+	{
+		std::string now = ShowList(Local(hero, lists[i]), 2, 40);
+		if (now != last[i])
+			Log("buff watch: %s %s", lists[i], now.substr(0, 900).c_str());
+		last[i] = now;
+	}
+	const char* names[] = { "aura_mana_lock", "aura_health_lock", "aura_mana_second", "aura_health_second" };
+	for (int i = 0; i < 4; i++)
+	{
+		std::string now = Show(Local(hero, names[i]), 2, 40);
+		if (now != last[2 + i])
+			Log("buff watch: %s %s -> %s", names[i], last[2 + i].c_str(), now.c_str());
+		last[2 + i] = now;
+	}
+}
+
 void DevTick(CInstance* Self)
 {
 	WatchLegacy();
+	WatchBuffs();
 	if (g_Dev.watch)
 		WatchForge(Self);
 	g_Step++;

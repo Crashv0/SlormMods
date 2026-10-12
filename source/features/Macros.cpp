@@ -3,6 +3,7 @@
 // the keys a running macro wants are set on the hero, so the game casts as if they were pressed.
 #include "../Suite.hpp"
 #include <imgui.h>
+#include <map>
 #include <algorithm>
 #include <array>
 #include <filesystem>
@@ -19,7 +20,7 @@ namespace
 	constexpr const char* SLOT_LIST = "Primary\0Secondary\0Support\0Aura 1\0Aura 2\0Aura 3\0Aura 4\0";
 	constexpr const char* PACKED = "SSM1";
 
-	enum Kind { ALL, ANY, NONE, LIFE_PCT, MANA_PCT, LIFE, MANA, COOLDOWN, CASTING, COMBAT, ENEMIES, SINCE, MOVING, KINDS };
+	enum Kind { ALL, ANY, NONE, LIFE_PCT, MANA_PCT, LIFE, MANA, COOLDOWN, CASTING, COMBAT, ENEMIES, SINCE, MOVING, BUFF, BUFF_STACKS, KINDS };
 	struct KindInfo
 	{
 		const char* name;
@@ -42,6 +43,8 @@ namespace
 		{ "enemies within", "", false, "How many living enemies are within the range of the hero. The range is in the numbers ESP shows for distances." },
 		{ "seconds since this macro fired", "s", false, "How long ago this macro last finished; very large before its first time." },
 		{ "moving", "", true, "The hero is changing place." },
+		{ "has buff", "", true, "The hero has the buff picked. An aura that is switched on is a buff of its own name." },
+		{ "buff stacks", "", false, "How many stacks of the buff picked the hero has; 0 without it." },
 	} };
 	constexpr std::array<const char*, 6> COMPARERS = { "<", "<=", ">", ">=", "=", "!=" };
 
@@ -54,6 +57,8 @@ namespace
 		float value = 50;
 		// For enemies within: how far, in a tenth of the room's units, as ESP shows distances.
 		float range = 20;
+		// For the buff kinds: the buff, as the game refers to it.
+		std::string buff;
 		std::vector<Cond> kids;
 	};
 
@@ -100,6 +105,8 @@ namespace
 		bool casting = false, combat = false, moving = false;
 		// How far each living enemy is from the hero, in the room's units.
 		std::vector<double> enemies;
+		// The stacks of each buff the hero has, by the game's reference for it.
+		std::map<std::string, double> buffs;
 		// Where the hero is on screen and how long one of the room's units is there, as shares of the screen.
 		float across = 0, down = 0, unit_across = 0, unit_down = 0;
 	};
@@ -157,6 +164,8 @@ namespace
 		// Asked for by the test button.
 		int test = 0;
 		double last_x = 0, last_y = 0;
+		// When each action was last pressed by a macro.
+		ULONGLONG pressed_at[SLOTS] = {};
 		bool in_town = false;
 		// Draws the ranges of the enemies within conditions around the hero.
 		bool show_ranges = false;
@@ -180,6 +189,53 @@ namespace
 		}
 
 		// ---- reading the game ----
+
+		// The game's table of buffs: its reference for each and the name it shows.
+		struct BuffInfo { std::string ref, name; };
+		std::vector<BuffInfo> buff_table;
+		char buff_filter[48] = "";
+
+		// The hero's buff_list is a list of the game's with a line for each buff: its row of the table
+		// first, its stacks fifth.
+		void ReadBuffs(CInstance* Hero)
+		{
+			if (buff_table.empty())
+			{
+				RValue table = Global("buffs");
+				if (table.IsArray())
+					for (const RValue& row : table.ToVector())
+					{
+						std::vector<RValue> cells = row.IsArray() ? row.ToVector() : std::vector<RValue>();
+						buff_table.push_back({ cells.size() > 1 ? ToText(cells[1]) : "", cells.size() > 13 ? ToText(cells[13]) : "" });
+					}
+			}
+			state.buffs.clear();
+			RValue list = Local(Hero, "buff_list");
+			if (!list.IsNumberConvertible() || ToNumber(g_Yytk->CallBuiltin("ds_exists", { list, RValue(2.0) })) <= 0)
+				return;
+			int size = static_cast<int>(ToNumber(g_Yytk->CallBuiltin("ds_list_size", { list })));
+			for (int i = 0; i < size && i < 400; i++)
+			{
+				RValue entry = g_Yytk->CallBuiltin("ds_list_find_value", { list, RValue(static_cast<double>(i)) });
+				if (!entry.IsArray())
+					continue;
+				std::vector<RValue> cells = entry.ToVector();
+				int row = cells.size() > 4 ? static_cast<int>(ToNumber(cells[0])) : -1;
+				if (row < 0 || row >= static_cast<int>(buff_table.size()) || buff_table[row].ref.empty())
+					continue;
+				double stacks = ToNumber(cells[4]);
+				state.buffs[buff_table[row].ref] = stacks > 0 ? stacks : 1;
+			}
+		}
+
+		// A buff as the overlay names it.
+		std::string BuffName(const std::string& Ref) const
+		{
+			for (const BuffInfo& each : buff_table)
+				if (each.ref == Ref)
+					return each.name.empty() ? Ref : each.name;
+			return Ref.empty() ? "pick a buff" : Ref;
+		}
 
 		void Read(CInstance* Hero)
 		{
@@ -210,6 +266,7 @@ namespace
 			cooldowns("general_cooldown_time", "general_cooldown_timer", 0, 3);
 			cooldowns("actives_cd_time", "actives_cd_timer", 3, 4);
 			state.valid = state.life_max > 0;
+			ReadBuffs(Hero);
 			state.enemies.clear();
 			if (!Uses(ENEMIES) && !show_ranges)
 				return;
@@ -260,6 +317,12 @@ namespace
 			}
 			case SINCE: return In.fired_at ? (GetTickCount64() - In.fired_at) / 1000.0 : 99999;
 			case MOVING: return state.moving;
+			case BUFF: return state.buffs.count(Of.buff) ? 1 : 0;
+			case BUFF_STACKS:
+			{
+				auto found = state.buffs.find(Of.buff);
+				return found == state.buffs.end() ? 0 : found->second;
+			}
 			}
 			return 0;
 		}
@@ -299,6 +362,9 @@ namespace
 			if (Of.movement == 1 && state.moving) return "the hero is moving";
 			if (Of.movement == 2 && !state.moving) return "the hero is standing still";
 			if (Of.fired_at && GetTickCount64() - Of.fired_at < static_cast<ULONGLONG>(Of.wait * 1000)) return "waiting between uses";
+			// An aura's buff shows a moment after its key; a second press in that time would switch it back.
+			for (const Step& each : Of.steps)
+				if (each.kind == PRESS && each.slot >= 3 && GetTickCount64() - pressed_at[std::clamp(each.slot, 0, SLOTS - 1)] < 1000) return "an aura it presses was just pressed";
 			if (Of.ready)
 				for (const Step& each : Of.steps)
 					if (each.kind == PRESS && state.cooldown[std::clamp(each.slot, 0, SLOTS - 1)] > 0) return "a skill is on cooldown";
@@ -396,6 +462,7 @@ namespace
 						continue;
 					}
 					step_frames++;
+					pressed_at[std::clamp(at.slot, 0, SLOTS - 1)] = now;
 					g_Yytk->CallBuiltin("variable_instance_set", { RValue(Hero), RValue(KEYS[std::clamp(at.slot, 0, SLOTS - 1)]), RValue(1.0) });
 					return;
 				}
@@ -520,7 +587,7 @@ namespace
 		{
 			char text[96];
 			snprintf(text, sizeof(text), "%c %d %d %d %d %g %g", Tag, Depth, Of.kind, Of.slot, Of.cmp, Of.value, Of.range);
-			Lines.push_back(text);
+			Lines.push_back(Of.buff.empty() ? text : text + (" " + Of.buff));
 			for (const Cond& kid : Of.kids)
 				WriteCond(Lines, kid, Depth + 1, Tag);
 		}
@@ -598,6 +665,7 @@ namespace
 					cond.value = 1;
 				}
 				cond.range = std::clamp(cond.range, 1.0f, 200.0f);
+				Words >> cond.buff;
 				cond.uid = Uid();
 				if (depth == 0)
 				{
@@ -706,7 +774,7 @@ namespace
 			if (KIND[Kind_].flag) cond.value = 1;
 			else if (Kind_ == COOLDOWN) { cond.cmp = 4; cond.value = 0; }
 			else if (Kind_ == SINCE) { cond.cmp = 3; cond.value = 5; }
-			else if (Kind_ == ENEMIES) { cond.cmp = 3; cond.value = 1; }
+			else if (Kind_ == ENEMIES || Kind_ == BUFF_STACKS) { cond.cmp = 3; cond.value = 1; }
 			else if (Kind_ == LIFE || Kind_ == MANA) { cond.cmp = 1; cond.value = 1000; }
 			return cond;
 		}
@@ -784,6 +852,50 @@ namespace
 				Tip("The range, in the numbers ESP shows for distances. Tick Show ranges above to see it drawn.");
 				ImGui::SameLine();
 				ImGui::TextUnformatted("count");
+			}
+			if (Of.kind == BUFF || Of.kind == BUFF_STACKS)
+			{
+				ImGui::SameLine();
+				if (ImGui::Button((BuffName(Of.buff) + "##buff").c_str()))
+				{
+					buff_filter[0] = 0;
+					ImGui::OpenPopup("buffs");
+				}
+				Tip("The buff to look for. Those the hero has now are listed first, so switch an aura on to find it.");
+				if (ImGui::BeginPopup("buffs"))
+				{
+					ImGui::SetNextItemWidth(unit * 16);
+					ImGui::InputTextWithHint("##filter", "search", buff_filter, sizeof(buff_filter));
+					std::string wanted = buff_filter;
+					std::transform(wanted.begin(), wanted.end(), wanted.begin(), [](unsigned char c) { return static_cast<char>(tolower(c)); });
+					ImGui::BeginChild("list", ImVec2(unit * 24, unit * 18));
+					// Those on the hero, then the rest.
+					for (int pass = 0; pass < 2; pass++)
+					{
+						ImGui::TextDisabled(pass == 0 ? "On the hero now" : "All the game's buffs");
+						for (size_t i = 0; i < buff_table.size(); i++)
+						{
+							const BuffInfo& each = buff_table[i];
+							if (each.ref.empty() || (pass == 0) != (state.buffs.count(each.ref) > 0))
+								continue;
+							std::string label = each.name.empty() ? each.ref : each.name + "  (" + each.ref + ")";
+							std::string lower = label;
+							std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return static_cast<char>(tolower(c)); });
+							if (!wanted.empty() && lower.find(wanted) == std::string::npos)
+								continue;
+							ImGui::PushID(static_cast<int>(i));
+							if (ImGui::Selectable(label.c_str(), each.ref == Of.buff))
+							{
+								Of.buff = each.ref;
+								Changed = true;
+								ImGui::CloseCurrentPopup();
+							}
+							ImGui::PopID();
+						}
+					}
+					ImGui::EndChild();
+					ImGui::EndPopup();
+				}
 			}
 			ImGui::SameLine();
 			if (info.flag)
