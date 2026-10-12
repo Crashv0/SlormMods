@@ -86,6 +86,15 @@ static constexpr std::array TRACED = {
 	"scr_weapon_pre_evolve",
 	"scr_weapon_evolve",
 	"scr_inventory_equip_weapon",
+	"scr_currency_spend",
+	"scr_ui_element_invest",
+	"scr_ui_element_devest",
+	"scr_elements_reset",
+	"scr_elements_active_array_edit",
+	"scr_currency_slorm",
+	"scr_slorm_cost",
+	"scr_element_get_upgrade_result",
+	"scr_element_navigate_tree",
 };
 // Of those, the ones called many times a step: each distinct call and result is logged once.
 static constexpr std::array BUSY = {
@@ -97,6 +106,10 @@ static constexpr std::array BUSY = {
 	"scr_hero_step",
 	"scr_target_finder",
 	"scr_hero_check_if_engaged",
+	"scr_currency_slorm",
+	"scr_slorm_cost",
+	"scr_element_get_upgrade_result",
+	"scr_element_navigate_tree",
 };
 static std::array<PFUNC_YYGMLScript, TRACED.size()> g_Originals = {};
 static std::array<std::string, TRACED.size()> g_LastCall;
@@ -522,8 +535,49 @@ static void WatchForge(CInstance* Self)
 		}
 }
 
+// Slorm and the ancestral legacy's ranks, logged as they change; the first change is dumped.
+static void WatchLegacy()
+{
+	static ULONGLONG read = 0;
+	if (GetTickCount64() - read < 250)
+		return;
+	read = GetTickCount64();
+	int who = static_cast<int>(ToNumber(Global("current_hero")));
+	RValue slorm = Global("essence"), ranks = Global("elements_rank");
+	if (who < 0 || !slorm.IsArray() || !ranks.IsArray())
+		return;
+	std::vector<RValue> slorms = slorm.ToVector(), heroes = ranks.ToVector();
+	if (who >= static_cast<int>(slorms.size()) || who >= static_cast<int>(heroes.size()) || !heroes[who].IsArray())
+		return;
+	static double had = -1;
+	static std::vector<double> last;
+	static int hero = -1;
+	static bool dumped = false;
+	std::vector<RValue> now = heroes[who].ToVector();
+	bool same_hero = hero == who && last.size() == now.size();
+	double has = ToNumber(slorms[who]);
+	if (same_hero && has != had)
+		Log("legacy watch: slorm %.0f -> %.0f (%+.0f)", had, has, has - had);
+	for (size_t i = 0; same_hero && i < now.size(); i++)
+		if (ToNumber(now[i]) != last[i])
+		{
+			Log("legacy watch: node %d rank %.0f -> %.0f", static_cast<int>(i), last[i], ToNumber(now[i]));
+			if (!dumped)
+			{
+				dumped = true;
+				g_Dev.dump_note = "legacy rank changed";
+				g_Dev.want_dump = true;
+			}
+		}
+	had = has;
+	hero = who;
+	last.resize(now.size());
+	for (size_t i = 0; i < now.size(); i++) last[i] = ToNumber(now[i]);
+}
+
 void DevTick(CInstance* Self)
 {
+	WatchLegacy();
 	if (g_Dev.watch)
 		WatchForge(Self);
 	g_Step++;
