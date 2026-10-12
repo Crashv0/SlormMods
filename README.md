@@ -58,6 +58,14 @@ On the Mods tab. Uses a chest when the hero is close enough to do it by hand.
 
 On the Mods tab. A reaper picked up is unlocked at once, without opening the character screen, and its screen is clicked away.
 
+### Auto spend slorm on Ancestral Legacy
+
+On the Mods tab. Used with the Ancestral Legacy open. The elemental damage the legacy grants grows with the slorm put into it, whichever nodes it goes to.
+
+- **Spend slorm.** Buys ranks on nodes picked at random until no more can be afforded, keeping at least the slorm you set.
+- **Give ranks back.** Gives up ranks on nodes picked at random until at least the slorm you set is back, leaving nodes in use alone.
+- **Checked.** Each rank is checked against its price, and it stops if the game takes or gives anything else.
+
 ### Auto enter Temppopotamus' Bastion
 
 On the Mods tab. Walking up to the Mage Academy entrance starts the Bastion without the menu.
