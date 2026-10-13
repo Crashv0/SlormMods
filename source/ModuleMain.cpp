@@ -287,6 +287,7 @@ static LiveItem ReadItemPlain(const RValue& Held)
 		if (fields[1].IsString() && affix.tier.size() == 1 && affix.tier != "L") affix.stat = fields[1].ToString();
 		else affix.id = static_cast<int>(ToNumber(fields[1]));
 		if (fields.size() > 2) affix.roll = ToNumber(fields[2]);
+		if (fields.size() > 4 && !affix.stat.empty()) affix.pure = static_cast<int>(ToNumber(fields[4]));
 		item.affixes.push_back(std::move(affix));
 	}
 	return item;
@@ -542,7 +543,7 @@ static std::string Number(double Value)
 }
 
 // One of an item's stats against what the build has for that slot: Match, Wrong when the build has no such stat,
-// Partial in another tier or under the build's roll.
+// Partial in another tier, under the build's roll, or not pure where the build's is.
 static Mark StatAgainst(const BuildItem& Wanted, const LiveItem& Item, const LiveAffix& Held, std::string& Note)
 {
 	Note.clear();
@@ -555,6 +556,12 @@ static Mark StatAgainst(const BuildItem& Wanted, const LiveItem& Item, const Liv
 		{
 			other = &affix;
 			continue;
+		}
+		// Any purity will do; how pure is not asked.
+		if (affix.pure && Held.pure <= 100)
+		{
+			Note = "not pure";
+			return Mark::Partial;
 		}
 		double need = WantedRoll(affix, Item.level, Held.best);
 		if (Held.roll >= need)
@@ -583,6 +590,11 @@ Mark GearStatMark(const BuildItem& Item, const BuildAffix& Affix, std::string& N
 		{
 			elsewhere = &held;
 			continue;
+		}
+		if (Affix.pure && held.pure <= 100)
+		{
+			Note = "not pure";
+			return Mark::Partial;
 		}
 		double need = WantedRoll(Affix, live->level, held.best);
 		if (held.roll >= need)
@@ -1098,8 +1110,11 @@ static void MarkGear(CInstance* Self, const Build& Build)
 static std::string Show(const RValue& Value, int Depth, size_t Limit);
 #endif
 
-// A solid square with a thin black edge.
-static void Pip(double X, double Y, Mark Kind)
+// The game's colour for pure stats, as it packs colours: blue, green, red.
+constexpr double PURE_COLOR = 70 + 231 * 256 + 176 * 65536;
+
+// A solid square with a thin black edge. One about a graft is in the pure colour below its diagonal.
+static void Pip(double X, double Y, Mark Kind, bool Grafted = false)
 {
 	const OutlineStyle& style = g_Outlines[OUTLINE_PIP];
 	double half = std::clamp(static_cast<double>(style.width), 2.0, 40.0) / 2 * g_Unit;
@@ -1109,6 +1124,10 @@ static void Pip(double X, double Y, Mark Kind)
 	g_Yytk->CallBuiltin("draw_rectangle", { RValue(X - half - 2), RValue(Y - half - 2), RValue(X + half + 1), RValue(Y + half + 1), RValue(false) });
 	g_Yytk->CallBuiltin("draw_set_color", { RValue(MarkColor(Kind)) });
 	g_Yytk->CallBuiltin("draw_rectangle", { RValue(X - half), RValue(Y - half), RValue(X + half - 1), RValue(Y + half - 1), RValue(false) });
+	if (!Grafted)
+		return;
+	g_Yytk->CallBuiltin("draw_set_color", { RValue(PURE_COLOR) });
+	g_Yytk->CallBuiltin("draw_triangle", { RValue(X + half), RValue(Y - half), RValue(X + half), RValue(Y + half), RValue(X - half), RValue(Y + half), RValue(false) });
 }
 
 // An item's tooltip: a pip on the bar beside each stat, for whether the build has that stat on that slot.
@@ -1213,6 +1232,15 @@ static void MarkTooltip(CInstance* Self, const Build& Build)
 	for (const LiveAffix& affix : held.affixes)
 		if (!affix.stat.empty()) listed.push_back(&affix);
 	std::stable_sort(listed.begin(), listed.end(), [](const LiveAffix* A, const LiveAffix* B) { return StatName(A->stat) < StatName(B->stat); });
+	// Pure stats the build has in a tier that the item lacks there: each is a graft still to make.
+	std::map<std::string, int> grafts;
+	for (const BuildAffix& affix : wanted->affixes)
+	{
+		bool there = false;
+		for (const LiveAffix& other : held.affixes)
+			if (other.tier == affix.tier && other.stat == affix.stat) there = true;
+		if (affix.pure && !there) grafts[affix.tier]++;
+	}
 	for (const LiveAffix* entry : listed)
 	{
 		const LiveAffix& affix = *entry;
@@ -1226,8 +1254,23 @@ static void MarkTooltip(CInstance* Self, const Build& Build)
 			used[line] = true;
 			// A line scrolled out of the panel has no pip.
 			double y = top + ToNumber(fields[1]);
+			Mark mark = StatAgainst(*wanted, held, affix, note);
+			bool grafted = false;
+			bool build_pure = false;
+			for (const BuildAffix& other : wanted->affixes)
+				if (other.stat == affix.stat && other.pure) build_pure = true;
+			// Off: the build's pure stat without its purity or in another tier, or a pure stat the build has not.
+			if (mark == Mark::Partial && (note == "not pure" || (note == "in another tier" && build_pure))) grafted = true;
+			else if (mark == Mark::Wrong && affix.pure > 100) grafted = true;
+			// A stat the build has no use for, in a tier still short of a graft, is where the graft goes.
+			else if (mark == Mark::Wrong && grafts[affix.tier] > 0)
+			{
+				grafts[affix.tier]--;
+				mark = Mark::Todo;
+				grafted = true;
+			}
 			if (y >= panel_top + 8 * scale && y <= panel_bottom)
-				Pip(bar, y, StatAgainst(*wanted, held, affix, note));
+				Pip(bar, y, mark, grafted);
 			break;
 		}
 	}

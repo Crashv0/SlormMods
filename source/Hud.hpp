@@ -171,6 +171,8 @@ struct LiveAffix
 	double roll = 0;
 	// The best roll the game allows this stat on this item, 0 when not known.
 	double best = 0;
+	// A stat's purity: above 100 when pure.
+	int pure = 0;
 };
 
 struct LiveItem
@@ -256,7 +258,7 @@ Mark UltimatumMark(const Build& Build, int Id);
 // A rune: in the build and equipped, in it and not, or equipped and not in it. None while the game has no answer.
 Mark RuneMark(const Build& Build, int Id);
 // A stat the build has on an item: Match in the same tier at the build's roll, Todo when it is not on the item,
-// Partial when it is there in another tier or at a lower roll; Note then says which.
+// Partial when it is there in another tier, at a lower roll, or not pure where the build's is; Note then says which.
 Mark GearStatMark(const BuildItem& Item, const BuildAffix& Affix, std::string& Note);
 // The item's reaper smith, mastery, attribute or legendary, by tier code and id: Partial below the build's value.
 Mark GearSpecialMark(const BuildItem& Item, const char* Tier, int Id, int Value, std::string& Note);

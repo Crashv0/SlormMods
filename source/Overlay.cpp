@@ -284,7 +284,12 @@ static void DrawGear(const Build& Build)
 			{
 				ImGui::TextColored(affix.pure ? PURE_COLOR : TierColor(affix.tier), "%s", StatName(affix.stat).c_str());
 				ImGui::SameLine();
-				ImGui::TextDisabled("%s%s", RollText(affix).c_str(), affix.pure ? ", pure" : "");
+				ImGui::TextDisabled("%s%s", RollText(affix).c_str(), affix.pure ? "," : "");
+				if (affix.pure)
+				{
+					ImGui::SameLine();
+					ImGui::TextColored(PURE_COLOR, "pure");
+				}
 				Mark mark = live ? GearStatMark(item, affix, other) : Mark::None;
 				status(mark, other);
 			}
