@@ -1,0 +1,6 @@
+#pragma once
+
+#define SLORMSUITE_MAJOR 0
+#define SLORMSUITE_MINOR 7
+#define SLORMSUITE_PATCH 0
+#define SLORMSUITE_VERSION "0.7.0"
