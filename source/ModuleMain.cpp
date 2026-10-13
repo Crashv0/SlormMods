@@ -1205,14 +1205,17 @@ static void MarkTooltip(CInstance* Self, const Build& Build)
 	if (!wanted)
 		return;
 
-	// The tooltip groups lines by tier whatever order the item holds them in, so pair them tier by tier.
+	// The tooltip groups lines by tier, and lists a tier's stats by name, whatever order the item holds them in.
 	// Only the stat tiers are placed reliably.
 	std::vector<RValue> line_list = lines.ToVector();
 	std::vector<bool> used(line_list.size(), false);
+	std::vector<const LiveAffix*> listed;
 	for (const LiveAffix& affix : held.affixes)
+		if (!affix.stat.empty()) listed.push_back(&affix);
+	std::stable_sort(listed.begin(), listed.end(), [](const LiveAffix* A, const LiveAffix* B) { return StatName(A->stat) < StatName(B->stat); });
+	for (const LiveAffix* entry : listed)
 	{
-		if (affix.stat.empty())
-			continue;
+		const LiveAffix& affix = *entry;
 		for (size_t line = 0; line < line_list.size(); line++)
 		{
 			if (used[line] || !line_list[line].IsArray())
