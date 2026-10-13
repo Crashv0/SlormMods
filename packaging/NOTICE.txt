@@ -1,0 +1,17 @@
+This download contains the following components.
+
+NoSlipperyIce
+  https://github.com/wistb/NoSlipperyIce
+  GNU Affero General Public License v3.0 (AGPL-3.0.txt)
+  Files: mods\Aurie\NoSlipperyIce.dll, version.dll
+
+Aurie Framework v2.0.2, unmodified release build
+  https://github.com/AurieFramework/Aurie
+  GNU Affero General Public License v3.0 (AGPL-3.0.txt)
+  File: mods\Native\AurieCore.dll
+
+YYToolkit v5.0.0c beta, unmodified release build
+  https://github.com/AurieFramework/YYToolkit
+  GNU Affero General Public License v3.0 (AGPL-3.0.txt)
+  File: mods\Aurie\YYToolkit.dll
+
