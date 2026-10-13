@@ -20,6 +20,8 @@ namespace
 		bool looting = false;
 		ULONGLONG away_since = 0;
 		PFUNC_YYGMLScript loot = nullptr;
+		// The chest_type of the chest a warlord leaves.
+		static constexpr double WARLORD = 7;
 
 		Chests() : Feature("Auto open chests", "chests",
 			"Opens and searches a chest when the hero is close enough to do it by hand.") {}
@@ -79,6 +81,10 @@ namespace
 				return;
 			std::string name = ToText(g_Yytk->CallBuiltin("object_get_name", { object }));
 			if (!(name == "obj_chest" && ordinary) && !(name == "obj_chest_forge" && war_chest))
+				return;
+			// A warlord's chest offers a pick of equipment: left to the player.
+			if (name == "obj_chest" && (ToNumber(g_Yytk->CallBuiltin("variable_instance_get", { target, RValue("chest_type") })) == WARLORD
+				|| g_Yytk->CallBuiltin("variable_instance_get", { target, RValue("war_rewards") }).IsArray()))
 				return;
 			double id = ToNumber(g_Yytk->CallBuiltin("variable_instance_get", { target, RValue("id") }));
 			if (id <= 0) id = target.ToDouble();
