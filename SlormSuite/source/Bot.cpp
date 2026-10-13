@@ -2,8 +2,10 @@
 // closes, picks up what drops, and takes the door once it can be had.
 #include "Suite.hpp"
 #include "ReaperNames.hpp"
+#include "LegendarySlots.hpp"
 #include <imgui.h>
 #include <deque>
+#include <iomanip>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -54,8 +56,31 @@ namespace
 		float loot_range = 450;
 		// In town, walks to Almerolis and starts the next battlefield.
 		bool restart = true;
-		// What is started from town: the battlefield, the Great Forge, or the Slorm Temple.
+		// What is started from town: the battlefield, the Great Forge, the Slorm Temple, or the Netherworld.
 		int mode = 0;
+		// The warlord run in the Netherworld, by his number; or the one that gives double Nether Charge.
+		int nether_warlord = 0;
+		bool nether_double = false;
+		// The warlord run is the one whose rewards suit the slot priority best, in place of the one picked.
+		bool nether_best = false;
+		// The Primordial Netherworld in place of the ordinary one.
+		bool nether_primordial = false;
+		// With the double charge run chosen: it is run until the Nether Charge is this much, then the warlord is. 0 for always.
+		float nether_until = 0;
+		// The pick from a warlord's chest is made for the player: a Nether item first, then by these.
+		bool nether_pick = false;
+		// Gear slots, the most wanted first; counted for Nether items only when asked.
+		int nether_slots[10] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+		bool nether_slots_nether = false;
+		// With no Nether item and none of the first so many slots on offer, slorm is spent on rolling
+		// offers again, while at least this much slorm is kept.
+		bool nether_reroll = false;
+		// Rolls go on until a Nether item is on offer, whatever the slots.
+		bool nether_reroll_nether = false;
+		int nether_wanted = 3;
+		float nether_keep = 1000000;
+		// Between what is left: 0 any of them, 1 the one worth the most goldus.
+		int nether_fallback = 0;
 		// The temple floor a run starts on, 0 for the one the launcher has; the highest ever cleared, -1 until read.
 		int temple_floor = 0, temple_cleared = -1;
 		// The shrine at the end of a temple floor is used before the door is taken.
@@ -996,6 +1021,153 @@ static bool BagFull()
 	return g_Farm.stop_full && g_Farm.bag_used >= 0 && g_Farm.bag_used >= g_Farm.bag_slots;
 }
 
+// The warlord whose expedition gives double Nether Charge for the hero played, -1 when none is marked.
+// The game keeps a row a warlord: times beaten, the mark, then legendaries.
+static int DoubleCharge()
+{
+	RValue heroes = Global("warlords_data");
+	int who = static_cast<int>(ToNumber(Global("current_hero")));
+	if (!heroes.IsArray() || who < 0)
+		return -1;
+	std::vector<RValue> all = heroes.ToVector();
+	if (who >= static_cast<int>(all.size()) || !all[who].IsArray())
+		return -1;
+	std::vector<RValue> rows = all[who].ToVector();
+	for (size_t i = 0; i < rows.size(); i++)
+	{
+		if (!rows[i].IsArray())
+			continue;
+		std::vector<RValue> row = rows[i].ToVector();
+		// The longer rows are kept another way. The mark is text from a save and a number once the game has set it.
+		if (row.size() >= 2 && row.size() <= 4 && (row[1].IsString() ? row[1].ToString() == "1" : ToNumber(row[1]) == 1))
+			return static_cast<int>(i);
+	}
+	return -1;
+}
+
+// A warlord's name, by his number.
+static std::string WarlordName(int Which)
+{
+	RValue table = Global("warlords");
+	std::vector<RValue> rows = table.IsArray() ? table.ToVector() : std::vector<RValue>();
+	if (Which < 0 || Which >= static_cast<int>(rows.size()) || !rows[Which].IsArray())
+		return "warlord " + std::to_string(Which);
+	std::vector<RValue> row = rows[Which].ToVector();
+	return row.size() > 11 && row[11].IsString() ? row[11].ToString() : "warlord " + std::to_string(Which);
+}
+
+// A warlord with a name of his own: his row names the enemy he is. The rest of the map are places.
+static bool NamedWarlord(int Which)
+{
+	RValue table = Global("warlords");
+	std::vector<RValue> rows = table.IsArray() ? table.ToVector() : std::vector<RValue>();
+	if (Which < 0 || Which >= static_cast<int>(rows.size()) || !rows[Which].IsArray())
+		return false;
+	std::vector<RValue> row = rows[Which].ToVector();
+	return row.size() > 3 && !ToText(row[3]).empty();
+}
+
+// How many reward legendaries a warlord or place holds for each gear slot; false when it has no row.
+static bool RewardCounts(int Which, int Counts[10])
+{
+	std::fill(Counts, Counts + 10, 0);
+	RValue heroes = Global("warlords_data");
+	int who = static_cast<int>(ToNumber(Global("current_hero")));
+	std::vector<RValue> all = heroes.IsArray() ? heroes.ToVector() : std::vector<RValue>();
+	if (who < 0 || who >= static_cast<int>(all.size()) || !all[who].IsArray())
+		return false;
+	std::vector<RValue> rows = all[who].ToVector();
+	if (Which < 0 || Which >= static_cast<int>(rows.size()) || !rows[Which].IsArray())
+		return false;
+	std::vector<RValue> row = rows[Which].ToVector();
+	// A place's row starts with two numbers that are not legendaries.
+	for (size_t i = row.size() <= 4 ? 2 : 0; i < row.size(); i++)
+	{
+		int legendary = static_cast<int>(ToNumber(row[i]));
+		if (legendary >= 0 && legendary < static_cast<int>(std::size(LEGENDARY_SLOTS)) && LEGENDARY_SLOTS[legendary] >= 0)
+			Counts[LEGENDARY_SLOTS[legendary]]++;
+	}
+	return true;
+}
+
+// What a warlord or place can give for the wanted slots, the first so many of the slot priority,
+// in that order: "[3 Armor] [2 Shoulder] [1 Glove]".
+static std::string RewardTags(int Which)
+{
+	static constexpr const char* const NAMES[10] = { "Helm", "Armor", "Shoulder", "Bracer", "Glove", "Boot", "Ring", "Amulet", "Belt", "Cape" };
+	int counts[10];
+	if (!RewardCounts(Which, counts))
+		return "";
+	std::string tags;
+	for (int rank = 0; rank < g_Farm.nether_wanted && rank < 10; rank++)
+	{
+		int slot = g_Farm.nether_slots[rank] % 10;
+		if (counts[slot] > 0)
+			tags += (tags.empty() ? "[" : " [") + std::to_string(counts[slot]) + ' ' + NAMES[slot] + ']';
+	}
+	return tags;
+}
+
+// How many of a warlord's reward legendaries are for the wanted slots, the first so many of the
+// slot priority, and how many he has in all.
+static void WantedRewards(int Which, int& Wanted, int& All)
+{
+	Wanted = All = 0;
+	int counts[10];
+	if (!RewardCounts(Which, counts))
+		return;
+	for (int rank = 0; rank < 10; rank++)
+	{
+		All += counts[g_Farm.nether_slots[rank] % 10];
+		if (rank < g_Farm.nether_wanted)
+			Wanted += counts[g_Farm.nether_slots[rank] % 10];
+	}
+}
+
+// The warlord with the largest share of his reward legendaries in the wanted slots, -1 for none; so
+// that what his chest holds is least likely to be for another slot. Between equal shares, the one
+// with more of them, then the one whose wanted slots stand higher in the priority. In the Primordial
+// Netherworld only the named warlords are fought, so only they are looked at.
+static int BestWarlord()
+{
+	int rank_of[10];
+	for (int rank = 0; rank < 10; rank++)
+		rank_of[g_Farm.nether_slots[rank] % 10] = rank;
+	int best = -1;
+	double most = 0;
+	for (int which = 0; which < 200; which++)
+	{
+		int counts[10], wanted = 0, all = 0;
+		if (!RewardCounts(which, counts))
+			break;
+		if (g_Farm.nether_primordial && !NamedWarlord(which))
+			continue;
+		WantedRewards(which, wanted, all);
+		if (wanted < 1)
+			continue;
+		int high = 0;
+		for (int slot = 0; slot < 10; slot++)
+			if (rank_of[slot] < g_Farm.nether_wanted)
+				high += counts[slot] * (10 - rank_of[slot]);
+		double score = static_cast<double>(wanted) / all * 1000000 + wanted * 1000 + high;
+		if (score > most)
+			most = score, best = which;
+	}
+	return best;
+}
+
+// The launcher shows the Netherworld's map: its buttons are the warlords.
+static bool NetherMap(CInstance* Self)
+{
+	RValue buttons = Local(Self, "mba");
+	if (!buttons.IsArray())
+		return false;
+	for (const RValue& button : buttons.ToVector())
+		if (button.IsArray() && !button.ToVector().empty() && ToText(button.ToVector()[0]) == "Warlords")
+			return true;
+	return false;
+}
+
 // Town: the result of the last expedition is closed, the hero walks to Almerolis, and the battlefield
 // is started through his menu with the calls the game makes on the clicks.
 static void Hub(CInstance* Self, CInstance* Hero, ULONGLONG Now)
@@ -1003,7 +1175,7 @@ static void Hub(CInstance* Self, CInstance* Hero, ULONGLONG Now)
 	// Where Almerolis offers expeditions.
 	static constexpr Place ALMEROLIS = { 2320, 505 };
 	static ULONGLONG acted = 0;
-	static int step = 0, asked = 0;
+	static int step = 0, asked = 0, nether_tries = 0;
 	static std::string seen;
 	std::string menu = ToText(Local(Self, "menu_show"));
 	bool open = ToText(Local(Self, "menu_position")) == "open";
@@ -1045,9 +1217,42 @@ static void Hub(CInstance* Self, CInstance* Hero, ULONGLONG Now)
 		if (step == 0)
 		{
 			step = 1;
-			// Almerolis lists the battlefield first, the Slorm Temple second and the Great Forge third.
-			call("scr_ui_launcher_change_quest", { RValue(g_Farm.mode == 1 ? 2.0 : g_Farm.mode == 2 ? 1.0 : 0.0) });
-			return Say(g_Farm.mode == 1 ? "choosing the Great Forge" : g_Farm.mode == 2 ? "choosing the Slorm Temple" : "choosing the battlefield");
+			nether_tries = 0;
+			// The launcher comes up on the expedition last chosen.
+			if (g_Farm.mode == 3 && NetherMap(Self))
+				return Say("the launcher is on the Netherworld");
+			// Almerolis lists the battlefield first, the Slorm Temple second, the Great Forge third and the Netherworld last.
+			call("scr_ui_launcher_change_quest", { RValue(g_Farm.mode == 1 ? 2.0 : g_Farm.mode == 2 ? 1.0 : g_Farm.mode == 3 ? 3.0 : 0.0) });
+			return Say(g_Farm.mode == 1 ? "choosing the Great Forge" : g_Farm.mode == 2 ? "choosing the Slorm Temple" : g_Farm.mode == 3 ? "choosing the Netherworld" : "choosing the battlefield");
+		}
+		// The Netherworld: its kind, then the warlord, each asked for until the launcher has it.
+		if (g_Farm.mode == 3)
+		{
+			if (!NetherMap(Self))
+				return Say("the launcher does not show the Netherworld's map; choose the Netherworld in it once");
+			int marked = g_Farm.nether_double ? DoubleCharge() : -1;
+			// With charge enough, the warlord is run to spend it.
+			double charge = ToNumber(Global("nether_charge"));
+			if (marked >= 0 && g_Farm.nether_until > 0 && charge >= g_Farm.nether_until)
+				marked = -1;
+			int best = g_Farm.nether_best ? BestWarlord() : -1;
+			int warlord = marked >= 0 ? marked : best >= 0 ? best : g_Farm.nether_warlord;
+			bool primordial = ToNumber(Global("nether_primordial")) > 0;
+			int chosen = static_cast<int>(ToNumber(Local(Self, "warlords_tooltip_panel")));
+			if (primordial != g_Farm.nether_primordial || chosen != warlord)
+			{
+				if (nether_tries++ >= 6)
+					return Say(primordial != g_Farm.nether_primordial ? "the launcher did not change between the Netherworld and the Primordial one" : "the launcher did not take the warlord");
+				if (primordial != g_Farm.nether_primordial)
+				{
+					call("scr_ui_launcher_map_primordial", {});
+					return Say(g_Farm.nether_primordial ? "choosing the Primordial Netherworld" : "choosing the ordinary Netherworld");
+				}
+				call("scr_ui_warlords_change_tooltip", { RValue(static_cast<double>(warlord)) });
+				Log("bot: warlord %d asked for, %s%s; the launcher had %d", warlord, WarlordName(warlord).c_str(), marked >= 0 ? ", the one with double Nether Charge" : best >= 0 ? ", the one with the largest share of rewards in the wanted slots" : "", chosen);
+				return Say("choosing the warlord");
+			}
+			Log("bot: starting on warlord %d, %s, primordial %d, nether charge %.1f", warlord, WarlordName(warlord).c_str(), primordial ? 1 : 0, ToNumber(Global("nether_charge")));
 		}
 		if (step == 1 && g_Farm.mode == 2 && g_Farm.temple_floor > 0)
 		{
@@ -1117,6 +1322,273 @@ static void Hub(CInstance* Self, CInstance* Hero, ULONGLONG Now)
 	call("scr_citizen_action", { RValue("Run Start") });
 	acted = Now + 800;
 	Say("asking Almerolis for an expedition");
+}
+
+// The game's price of an item: the item, then a number the game passes with it. What that number
+// is, is learnt from the game's own calls: until one has been seen, the price is not asked for.
+static PFUNC_YYGMLScript g_GoldValue = nullptr;
+static bool g_GoldKnown = false;
+static double g_GoldWith = 0;
+static RValue& GoldValueHook(CInstance* Self, CInstance* Other, RValue& Result, int ArgumentCount, RValue** Arguments)
+{
+	RValue& result = g_GoldValue(Self, Other, Result, ArgumentCount, Arguments);
+	static int logged = 0;
+	bool item = ArgumentCount == 2 && Arguments[0] && Arguments[0]->IsArray() && Arguments[1] && !Arguments[1]->IsArray() && !Arguments[1]->IsString() && Arguments[1]->IsNumberConvertible();
+	if (logged < 8)
+	{
+		logged++;
+		Log("bot: the game priced an item: %d arguments, the first %s, the second %s %.2f, result %.0f", ArgumentCount,
+			ArgumentCount > 0 && Arguments[0] && Arguments[0]->IsArray() ? "a list" : "not a list",
+			item ? "the number" : ArgumentCount > 1 && Arguments[1] && Arguments[1]->IsString() ? "text" : "something else", item ? Arguments[1]->ToDouble() : 0.0,
+			result.IsNumberConvertible() ? result.ToDouble() : -1.0);
+	}
+	if (item && result.IsNumberConvertible())
+	{
+		g_GoldKnown = true;
+		g_GoldWith = Arguments[1]->ToDouble();
+	}
+	return result;
+}
+
+static constexpr const char* const SLOT_REFS[10] = { "helm", "body", "shoulder", "bracer", "glove", "boot", "ring", "amulet", "belt", "cape" };
+static constexpr const char* const SLOT_NAMES[10] = { "Helm", "Armor", "Shoulder", "Bracer", "Glove", "Boot", "Ring", "Amulet", "Belt", "Cape" };
+
+// What a warlord's chest offers: where in the chest, whether Nether, its slot's place in the priority
+// list, and its price when the game can be asked.
+struct Offer { int at = 0; bool nether = false; int rank = 99; double worth = 0; std::string what; };
+static std::vector<Offer> Offers(CInstance* Self, CInstance* Chest)
+{
+	RValue held = Local(Chest, "war_rewards");
+	std::vector<RValue> offers = held.IsArray() ? held.ToVector() : std::vector<RValue>();
+	std::vector<Offer> all;
+	for (size_t i = 0; i < offers.size(); i++)
+	{
+		if (!offers[i].IsArray() || offers[i].ToVector().empty() || !offers[i].ToVector()[0].IsArray())
+			continue;
+		std::vector<RValue> header = offers[i].ToVector()[0].ToVector();
+		if (header.size() < 3)
+			continue;
+		Offer offer;
+		offer.at = static_cast<int>(i);
+		std::string slot = ToText(header[1]);
+		// A Nether item is above level 100, and says so in its header.
+		offer.nether = ToNumber(header[2]) > 100 || ToText(header[0]) == "nether" || (header.size() > 9 && ToNumber(header[9]) > 0);
+		for (int rank = 0; rank < 10; rank++)
+			if (slot == SLOT_REFS[g_Farm.nether_slots[rank] % 10])
+				offer.rank = rank;
+		if (g_Farm.nether_fallback == 1 && g_GoldKnown)
+		{
+			RValue worth, with(g_GoldWith);
+			RValue* arguments[] = { &offers[i], &with };
+			g_GoldValue(Self, Self, worth, 2, arguments);
+			offer.worth = worth.IsNumberConvertible() ? worth.ToDouble() : 0;
+		}
+		char text[96];
+		snprintf(text, sizeof(text), "%s%s level %.0f, worth %.0f", offer.nether ? "Nether " : "", slot.c_str(), ToNumber(header[2]), offer.worth);
+		offer.what = text;
+		Log("bot: offer %d: %s", offer.at + 1, text);
+		all.push_back(offer);
+	}
+	return all;
+}
+
+// The offer to spend slorm on rolling again, -1 for none: with nothing wanted on offer (no Nether
+// item, no slot among the wanted ones), the least wanted that has not been rolled again yet. The
+// game rolls each offer again once. A roll can turn up a Nether item: when asked, only one of those
+// counts as wanted.
+static int RerollReward(CInstance* Self, const std::vector<Offer>& All, double Cost)
+{
+	if (!g_Farm.nether_reroll || All.empty())
+		return -1;
+	for (const Offer& offer : All)
+		if (offer.nether || (!g_Farm.nether_reroll_nether && offer.rank < g_Farm.nether_wanted))
+			return -1;
+	RValue slorms = Global("essence"), done = Local(Self, "war_reward_reroll");
+	int who = static_cast<int>(ToNumber(Global("current_hero")));
+	std::vector<RValue> held = slorms.IsArray() ? slorms.ToVector() : std::vector<RValue>(), rolled = done.IsArray() ? done.ToVector() : std::vector<RValue>();
+	if (who < 0 || who >= static_cast<int>(held.size()) || ToNumber(held[who]) - Cost < g_Farm.nether_keep)
+		return -1;
+	int worst = -1, rank = -1;
+	for (const Offer& offer : All)
+		if (offer.at < static_cast<int>(rolled.size()) && ToNumber(rolled[offer.at]) < 1 && offer.rank > rank)
+			worst = offer.at, rank = offer.rank;
+	return worst;
+}
+
+// Which of a warlord's chest's offers is taken, by the Farm's rules; -1 when there is none to read.
+static int PickReward(std::vector<Offer> all)
+{
+	if (all.empty())
+		return -1;
+	auto keep = [&](auto Wanted) { all.erase(std::remove_if(all.begin(), all.end(), [&](const Offer& Of) { return !Wanted(Of); }), all.end()); };
+	bool nether = std::any_of(all.begin(), all.end(), [](const Offer& Of) { return Of.nether; });
+	std::string why = nether ? "a Nether item" : "";
+	if (nether)
+		keep([](const Offer& Of) { return Of.nether; });
+	if (all.size() > 1 && (nether || !g_Farm.nether_slots_nether))
+	{
+		int best = 99;
+		for (const Offer& offer : all) best = (std::min)(best, offer.rank);
+		keep([&](const Offer& Of) { return Of.rank == best; });
+		why += why.empty() ? "its slot" : ", its slot";
+	}
+	size_t taken = 0;
+	if (all.size() > 1)
+	{
+		if (g_Farm.nether_fallback == 1 && g_GoldKnown)
+		{
+			for (size_t i = 1; i < all.size(); i++)
+				if (all[i].worth > all[taken].worth) taken = i;
+			why += why.empty() ? "worth the most" : ", worth the most";
+		}
+		else
+		{
+			taken = static_cast<size_t>(GetTickCount64() % all.size());
+			why += why.empty() ? "at random" : ", at random";
+			if (g_Farm.nether_fallback == 1)
+				why += " (the game has not priced an item yet this session)";
+		}
+	}
+	Log("bot: taking offer %d, %s: %s", all[taken].at + 1, all[taken].what.c_str(), why.empty() ? "the only one" : why.c_str());
+	return all[taken].at;
+}
+
+// Set when the player takes one of the offers in a warlord's chest.
+static bool g_WarlordPicked = false;
+static ULONGLONG g_WarlordPickedAt = 0;
+static PFUNC_YYGMLScript g_Choose = nullptr;
+static RValue& ChooseHook(CInstance* Self, CInstance* Other, RValue& Result, int ArgumentCount, RValue** Arguments)
+{
+	g_WarlordPicked = true;
+	g_WarlordPickedAt = GetTickCount64();
+	return g_Choose(Self, Other, Result, ArgumentCount, Arguments);
+}
+
+// The warlord's floor has no breaches. The warlord and what he calls are walked at until his chest
+// comes; the chest is opened and searched, the pick of equipment is made by the Farm's rules or left to the player, and the door
+// that follows is taken home.
+static void Warlord(CInstance* Self, CInstance* Hero, CInstance* Level, const Place& Me, ULONGLONG Now)
+{
+	static ULONGLONG acted = 0, picking_at = 0;
+	// A floor just come to.
+	if (g_Closed != -2)
+	{
+		g_Closed = -2;
+		Rest();
+		acted = picking_at = 0;
+		g_WarlordPicked = false;
+		Log("bot: the warlord's floor, the hero at %.0f %.0f", Me.x, Me.y);
+#ifdef SLORM_DEV
+		g_Dev.dump_note = "warlord floor";
+		g_Dev.want_dump = true;
+#endif
+	}
+	if (ToText(Local(Self, "menu_show")) == "rewards")
+	{
+		static ULONGLONG shown_at = 0;
+		if (Now - picking_at > 1000)
+			shown_at = Now;
+		picking_at = Now;
+		g_Attack = false;
+		if (Busy()) WalkStop();
+		bool full = g_Farm.bag_used >= 0 && g_Farm.bag_used >= g_Farm.bag_slots;
+		if (!g_Farm.nether_pick || full)
+			return Say(full && g_Farm.nether_pick ? "the bag is full: pick your equipment yourself" : "the warlord's chest is open: pick your equipment");
+		// The offers are given a moment to be there, and one try a few seconds.
+		CInstance* chest = FindInstance("obj_chest");
+		if (chest && !g_WarlordPicked && ToText(Local(Self, "menu_position")) == "open" && Now - shown_at > 1500 && Now > acted + 3000)
+		{
+			acted = Now;
+			// What a roll cost last time; the game does not say before.
+			static double cost = 100000, had = -1;
+			RValue slorms = Global("essence");
+			int who = static_cast<int>(ToNumber(Global("current_hero")));
+			double has = slorms.IsArray() && who >= 0 && who < static_cast<int>(slorms.ToVector().size()) ? ToNumber(slorms.ToVector()[who]) : -1;
+			if (had > has && has >= 0)
+			{
+				cost = had - has;
+				Log("bot: that roll cost %.0f slorm, %.0f left", cost, has);
+			}
+			had = -1;
+			std::vector<Offer> offers = Offers(Self, chest);
+			int again = RerollReward(Self, offers, cost);
+			if (again >= 0)
+			{
+				had = has;
+				Log("bot: %s on offer, rolling offer %d again", g_Farm.nether_reroll_nether ? "no Nether item" : "nothing wanted", again + 1);
+				Call(Self, "scr_ui_menu_warlords_reward_reroll", { RValue(static_cast<double>(again)) });
+				return Say("rolling an offer again");
+			}
+			int offer = PickReward(offers);
+			if (offer >= 0)
+				Call(Self, "scr_ui_menu_warlords_reward_choose", { RValue(static_cast<double>(offer)) });
+		}
+		return Say("picking from the warlord's chest");
+	}
+	// The door home stands there as soon as the warlord falls: the chest comes first, until an offer is taken.
+	bool picked = g_Choose ? g_WarlordPicked : picking_at && Now > picking_at + 4000;
+	CInstance* chest = picked ? nullptr : FindInstance("obj_chest");
+	if (chest)
+	{
+		g_Attack = false;
+		Place at = { ToNumber(Local(chest, "x")), ToNumber(Local(chest, "y")) };
+		double away = Far(Me, at);
+		Say("opening the warlord's chest");
+		// Used from the hero's side of it; a pick put away unmade is put up again after a moment.
+		if (away > 150)
+			Go({ at.x + (Me.x - at.x) / away * 60, at.y + (Me.y - at.y) / away * 60 + 18 }, Now);
+		else if (!Busy() && Now > acted + 1500 && Now > picking_at + 4000)
+		{
+			acted = Now;
+			Log("bot: using the warlord's chest at %.0f %.0f from %.0f away, open %.0f, type %.0f", at.x, at.y, away, ToNumber(Local(chest, "chest_open")), ToNumber(Local(chest, "chest_type")));
+			Use(chest, 15);
+		}
+		return;
+	}
+	if (CInstance* door = FindInstance("obj_breach_door"))
+	{
+		g_Attack = false;
+		Place at = { ToNumber(Local(door, "x")), ToNumber(Local(door, "y")) };
+		// What was picked falls out of the chest a moment later and is picked up first, whatever the loot setting.
+		bool loot = g_Farm.loot;
+		g_Farm.loot = true;
+		bool taking = Loot(Me, Now);
+		g_Farm.loot = loot;
+		if (taking)
+			return;
+		if (g_WarlordPicked && Now - g_WarlordPickedAt < 2500)
+			return Say("waiting for what the chest gives");
+		Say("heading home");
+		if (Far(Me, at) > 80)
+			Go({ at.x, at.y + 30 }, Now, 30);
+		else if (!Busy() && Now > acted + 1500)
+		{
+			acted = Now;
+			Log("bot: taking the door home at %.0f %.0f", at.x, at.y);
+			Use(door, 14);
+		}
+		return;
+	}
+	std::vector<Place> enemies = Enemies(Hero, Me);
+	if (!enemies.empty())
+	{
+		g_AttackAt = enemies[0];
+		g_Attack = g_Farm.attack && Far(enemies[0], Me) <= HIT;
+		if (g_Attack && Busy())
+			WalkStop();
+		else if (!g_Attack && Far(enemies[0], Me) > CLOSE)
+			Go(enemies[0], Now);
+		return Say("fighting the warlord");
+	}
+	g_Attack = false;
+	// Where the warlord comes in, once the level knows.
+	Place start = { ToNumber(Local(Level, "boss_start_x")), ToNumber(Local(Level, "boss_start_y")) };
+	if (start.x > 0 && start.y > 0 && Far(Me, start) > 60)
+	{
+		Go(start, Now);
+		return Say("walking to the warlord");
+	}
+	Say("waiting for the warlord");
 }
 
 // The hero is walked by the game's click to move, an option of the game that can be off.
@@ -1252,6 +1724,8 @@ static void BotTick(CInstance* Self)
 	CInstance* level = FindInstance("obj_procedural");
 	RValue rooms = level ? Local(level, "temple_room_array") : RValue();
 	bool temple = rooms.IsArray() && !rooms.ToVector().empty();
+	if (level && ToNumber(Local(level, "warlord_boss_floor")) > 0)
+		return Warlord(Self, hero, level, me, now);
 	static ULONGLONG shrine_at = 0;
 	static int shrine_tries = 0;
 	static double pure_had = -1;
@@ -1387,8 +1861,9 @@ static void BotTick(CInstance* Self)
 	if (Nearest("obj_breach_door", me, exit))
 	{
 		Rest();
-		bool home = BagFull() || (g_Farm.max_floors > 0 && g_Farm.floors >= g_Farm.max_floors);
-		snprintf(text, sizeof(text), "taking the door %s at %.0f %.0f", home ? (BagFull() ? "home with a full bag" : "home") : "to the next floor", exit.x, exit.y);
+		// The Netherworld's doors only go on, to the warlord.
+		bool home = g_Farm.mode != 3 && (BagFull() || (g_Farm.max_floors > 0 && g_Farm.floors >= g_Farm.max_floors));
+		snprintf(text, sizeof(text), "taking the door %s at %.0f %.0f", home ? (BagFull() ? "home with a full bag" : "home") : g_Farm.mode == 3 ? "on" : "to the next floor", exit.x, exit.y);
 		Say(text);
 		Exit(Self, exit, home ? 2 : 1, me, now);
 		return;
@@ -1610,6 +2085,12 @@ namespace
 			PFUNC_YYGMLScript pick_up = FindScript("scr_pick_up_item");
 			if (!pick_up || !AurieSuccess(MmCreateHook(g_ArSelfModule, "SlormSuite pick up", pick_up, PickUpHook, reinterpret_cast<PVOID*>(&g_PickUp))))
 				Log("farmer: no pick up script, reapers are not unlocked and nothing is listed");
+			PFUNC_YYGMLScript choose = FindScript("scr_ui_menu_warlords_reward_choose");
+			if (!choose || !AurieSuccess(MmCreateHook(g_ArSelfModule, "SlormSuite warlord pick", choose, ChooseHook, reinterpret_cast<PVOID*>(&g_Choose))))
+				Log("farmer: no warlord reward script, the door home is taken once the chest is gone"), g_Choose = nullptr;
+			PFUNC_YYGMLScript gold = FindScript("scr_item_gold_value");
+			if (!gold || !AurieSuccess(MmCreateHook(g_ArSelfModule, "SlormSuite item price", gold, GoldValueHook, reinterpret_cast<PVOID*>(&g_GoldValue))))
+				Log("farmer: no item price script, picks by worth are made at random"), g_GoldValue = nullptr;
 		}
 
 		void Tick(CInstance* Self) override
@@ -1645,9 +2126,9 @@ namespace
 			ImGui::SameLine();
 			// Almerolis' four, in his order; the mode each stands for, -1 for one the Farmer cannot play yet.
 			static const char* const EXPEDITIONS[] = { "Battlefield", "The Slorm Temple", "The Great Forge", "The Netherworld" };
-			static constexpr int MODES[] = { 0, 2, 1, -1 };
+			static constexpr int MODES[] = { 0, 2, 1, 3 };
 			ImGui::SetNextItemWidth(170 * g_Appearance.scale);
-			if (ImGui::BeginCombo("##expedition", EXPEDITIONS[g_Farm.mode == 1 ? 2 : g_Farm.mode == 2 ? 1 : 0]))
+			if (ImGui::BeginCombo("##expedition", EXPEDITIONS[g_Farm.mode == 1 ? 2 : g_Farm.mode == 2 ? 1 : g_Farm.mode == 3 ? 3 : 0]))
 			{
 				for (int i = 0; i < 4; i++)
 				{
@@ -1671,7 +2152,7 @@ namespace
 					ImGui::SetTooltip("The hero holds the center of the forge and lets the enemies come,\ngoing out to them for a while when none has fallen for 6 seconds.\nOff, it walks at the nearest ones.");
 				ImGui::Unindent();
 			}
-			else
+			else if (g_Farm.mode != 3)
 			{
 				ImGui::Indent();
 				ImGui::SetNextItemWidth(160 * g_Appearance.scale);
@@ -1748,6 +2229,152 @@ namespace
 				ImGui::TextDisabled("Floors played before heading home are set above, with the expedition.");
 				ImGui::EndTabItem();
 			}
+			if (ImGui::BeginTabItem("Netherworld"))
+			{
+				RValue table = Global("warlords");
+				int count = table.IsArray() ? static_cast<int>(table.ToVector().size()) : 0;
+				int marked = DoubleCharge();
+				// In the Primordial Netherworld only the named warlords are fought; a place there is breaches until its bar is full.
+				auto label = [&](int Which) {
+					return WarlordName(Which) + (g_Farm.nether_primordial && NamedWarlord(Which) ? "  (warlord)" : "") + (Which == marked ? "  (double Nether Charge)" : "");
+				};
+				int best = g_Farm.nether_best ? BestWarlord() : -1;
+				ImGui::BeginDisabled(best >= 0 || (g_Farm.nether_double && marked >= 0 && g_Farm.nether_until <= 0));
+				ImGui::SetNextItemWidth(330 * g_Appearance.scale);
+				std::string chosen_tags = RewardTags(g_Farm.nether_warlord);
+				if (ImGui::BeginCombo("Warlord", count ? (label(g_Farm.nether_warlord) + (chosen_tags.empty() ? "" : "  " + chosen_tags)).c_str() : "load a character to list them"))
+				{
+					// By name.
+					std::vector<std::pair<std::string, int>> listed;
+					for (int i = 0; i < count; i++)
+						listed.push_back({ WarlordName(i), i });
+					std::sort(listed.begin(), listed.end());
+					for (const auto& [name, which] : listed)
+					{
+						if (ImGui::Selectable((label(which) + "##" + std::to_string(which)).c_str(), which == g_Farm.nether_warlord))
+						{
+							g_Farm.nether_warlord = which;
+							changed = true;
+						}
+						// What it gives for the wanted slots, in green.
+						std::string tags = RewardTags(which);
+						if (!tags.empty())
+						{
+							ImGui::SameLine();
+							ImGui::TextColored({ 0.45f, 0.9f, 0.45f, 1.0f }, "%s", tags.c_str());
+						}
+					}
+					ImGui::EndCombo();
+				}
+				ImGui::EndDisabled();
+				changed |= ImGui::Checkbox("Run the warlord with the largest share of rewards in my wanted slots", &g_Farm.nether_best);
+				if (ImGui::IsItemHovered())
+					ImGui::SetTooltip("Of all the legendaries a warlord can give, the share that is for the wanted slots set below:\n2 Glove and 2 Shoulder of 7 beats 3 Glove of 7 when both slots are wanted.\nLooked up again before each run, as the game changes the rewards after each one won.\nWith Primordial ticked only the named warlords are looked at.");
+				if (g_Farm.nether_best)
+				{
+					ImGui::SameLine();
+					if (best >= 0)
+					{
+						int wanted = 0, all = 0;
+						WantedRewards(best, wanted, all);
+						ImGui::TextDisabled("%s, %d of %d wanted", WarlordName(best).c_str(), wanted, all);
+						std::string tags = RewardTags(best);
+						if (!tags.empty())
+						{
+							ImGui::SameLine();
+							ImGui::TextColored({ 0.45f, 0.9f, 0.45f, 1.0f }, "%s", tags.c_str());
+						}
+					}
+					else
+						ImGui::TextDisabled("none found");
+				}
+				changed |= ImGui::Checkbox("Run the warlord with double Nether Charge instead", &g_Farm.nether_double);
+				if (ImGui::IsItemHovered())
+					ImGui::SetTooltip("The one the Netherworld's map marks with a banner; it moves to another warlord over time.\nThe warlord chosen above is run when none is marked.");
+				if (g_Farm.nether_double)
+				{
+					ImGui::SameLine();
+					ImGui::TextDisabled("%s", marked >= 0 ? WarlordName(marked).c_str() : "none marked");
+				}
+				if (g_Farm.nether_double)
+				{
+					ImGui::Indent();
+					ImGui::SetNextItemWidth(70 * g_Appearance.scale);
+					changed |= ImGui::InputFloat("until Nether Charge is at least this, then the warlord above (0 = always)", &g_Farm.nether_until, 0, 0, "%.0f");
+					g_Farm.nether_until = (std::min)((std::max)(g_Farm.nether_until, 0.0f), 100000.0f);
+					ImGui::SameLine();
+					ImGui::TextDisabled("now %.1f", ToNumber(Global("nether_charge")));
+					ImGui::Unindent();
+				}
+				changed |= ImGui::Checkbox("Primordial Netherworld", &g_Farm.nether_primordial);
+				// The gear slots in the order wanted: for the pick from the chest and for the choice of warlord.
+				bool listed = ImGui::TreeNode("Slot priority");
+				for (int rank = 0; listed && rank < 10; rank++)
+				{
+					ImGui::PushID(rank);
+					ImGui::BeginDisabled(rank == 0);
+					if (ImGui::ArrowButton("up", ImGuiDir_Up)) { std::swap(g_Farm.nether_slots[rank], g_Farm.nether_slots[rank - 1]); changed = true; }
+					ImGui::EndDisabled();
+					ImGui::SameLine();
+					ImGui::BeginDisabled(rank == 9);
+					if (ImGui::ArrowButton("down", ImGuiDir_Down)) { std::swap(g_Farm.nether_slots[rank], g_Farm.nether_slots[rank + 1]); changed = true; }
+					ImGui::EndDisabled();
+					ImGui::SameLine();
+					ImGui::Text("%d  %s", rank + 1, SLOT_NAMES[g_Farm.nether_slots[rank] % 10]);
+					ImGui::PopID();
+				}
+				if (listed)
+					ImGui::TreePop();
+				ImGui::SetNextItemWidth(120 * g_Appearance.scale);
+				changed |= ImGui::SliderInt("How many slots from the top of Slot priority are wanted", &g_Farm.nether_wanted, 1, 10, "%d", ImGuiSliderFlags_AlwaysClamp);
+				if (ImGui::IsItemHovered())
+					ImGui::SetTooltip("Used to choose the warlord whose rewards suit best, and to stop rolling offers again.\nReorder the slots under Slot priority.");
+				{
+					// The slots that are, by name.
+					std::string wanted;
+					for (int rank = 0; rank < g_Farm.nether_wanted; rank++)
+						wanted += std::string(rank ? ", " : "") + SLOT_NAMES[g_Farm.nether_slots[rank] % 10];
+					ImGui::TextDisabled("Wanted now: %s", wanted.c_str());
+				}
+				ImGui::SeparatorText("Warlord's chest");
+				changed |= ImGui::Checkbox("Pick the equipment for me", &g_Farm.nether_pick);
+				if (ImGui::IsItemHovered())
+					ImGui::SetTooltip("Off, the pick is left to you and the hero heads home once you have made it.\nWith a full bag it is left to you as well.");
+				if (g_Farm.nether_pick)
+				{
+					ImGui::Indent();
+					ImGui::TextDisabled("A Nether item is always taken. Then by Slot priority above, the most wanted first.");
+					changed |= ImGui::Checkbox("Spend slorm to roll offers again", &g_Farm.nether_reroll);
+					if (ImGui::IsItemHovered())
+						ImGui::SetTooltip("The least wanted offer is rolled again, then the next, until what is asked for is on offer.\nThe game rolls each of the three offers again once, and a roll can turn up a Nether item.");
+					if (g_Farm.nether_reroll)
+					{
+						ImGui::Indent();
+						int until = g_Farm.nether_reroll_nether ? 1 : 0;
+						static const char* const UNTIL[] = { "Until a wanted slot or a Nether item is on offer", "Until a Nether item is on offer" };
+						ImGui::SetNextItemWidth(430 * g_Appearance.scale);
+						if (ImGui::Combo("##rolluntil", &until, UNTIL, 2))
+						{
+							g_Farm.nether_reroll_nether = until == 1;
+							changed = true;
+						}
+						if (g_Farm.nether_reroll_nether)
+							ImGui::TextDisabled("Every offer is rolled, a legendary in a wanted slot too.");
+						ImGui::SetNextItemWidth(120 * g_Appearance.scale);
+						changed |= ImGui::InputFloat("Keep at least this much slorm", &g_Farm.nether_keep, 0, 0, "%.0f");
+						g_Farm.nether_keep = (std::max)(g_Farm.nether_keep, 0.0f);
+						ImGui::Unindent();
+					}
+					changed |= ImGui::Checkbox("Slots count for Nether items only", &g_Farm.nether_slots_nether);
+					static const char* const FALLBACK[] = { "A random one", "The one worth the most goldus" };
+					ImGui::SetNextItemWidth(230 * g_Appearance.scale);
+					changed |= ImGui::Combo("Between what is left", &g_Farm.nether_fallback, FALLBACK, 2);
+					if (g_Farm.nether_fallback == 1 && !g_GoldKnown)
+						ImGui::TextDisabled("The game has not priced an item yet this session: until it does, a random one is taken.");
+					ImGui::Unindent();
+				}
+				ImGui::EndTabItem();
+			}
 			// The mods whose tabs sit in this one.
 			for (Feature* feature : Features())
 			{
@@ -1785,7 +2412,28 @@ namespace
 			else if (Name == "extra") Words >> g_Farm.extra;
 			else if (Name == "loot_range") Words >> g_Farm.loot_range;
 			else if (Name == "skip_chaos") { Words >> flag; g_Farm.skip_chaos = flag != 0; }
-			else if (Name == "mode") { Words >> g_Farm.mode; g_Farm.mode = g_Farm.mode == 1 || g_Farm.mode == 2 ? g_Farm.mode : 0; }
+			else if (Name == "mode") { Words >> g_Farm.mode; g_Farm.mode = g_Farm.mode >= 1 && g_Farm.mode <= 3 ? g_Farm.mode : 0; }
+			else if (Name == "nether_warlord") { Words >> g_Farm.nether_warlord; g_Farm.nether_warlord = (std::min)((std::max)(g_Farm.nether_warlord, 0), 200); }
+			else if (Name == "nether_double") { Words >> flag; g_Farm.nether_double = flag != 0; }
+			else if (Name == "nether_primordial") { Words >> flag; g_Farm.nether_primordial = flag != 0; }
+			else if (Name == "nether_best") { Words >> flag; g_Farm.nether_best = flag != 0; }
+			else if (Name == "nether_until") { Words >> g_Farm.nether_until; g_Farm.nether_until = (std::min)((std::max)(g_Farm.nether_until, 0.0f), 100000.0f); }
+			else if (Name == "nether_pick") { Words >> flag; g_Farm.nether_pick = flag != 0; }
+			else if (Name == "nether_slots_nether") { Words >> flag; g_Farm.nether_slots_nether = flag != 0; }
+			else if (Name == "nether_fallback") { Words >> flag; g_Farm.nether_fallback = flag == 1 ? 1 : 0; }
+			else if (Name == "nether_reroll") { Words >> flag; g_Farm.nether_reroll = flag != 0; }
+			else if (Name == "nether_reroll_nether") { Words >> flag; g_Farm.nether_reroll_nether = flag != 0; }
+			else if (Name == "nether_wanted") { Words >> g_Farm.nether_wanted; g_Farm.nether_wanted = (std::min)((std::max)(g_Farm.nether_wanted, 1), 10); }
+			else if (Name == "nether_keep") { Words >> g_Farm.nether_keep; g_Farm.nether_keep = (std::max)(g_Farm.nether_keep, 0.0f); }
+			else if (Name == "nether_slots")
+			{
+				// Each slot once, or the order is left as it was.
+				int order[10], seen = 0, count = 0;
+				while (count < 10 && Words >> flag && flag >= 0 && flag < 10 && !(seen & (1 << flag)))
+					order[count++] = flag, seen |= 1 << flag;
+				if (count == 10)
+					std::copy(order, order + 10, g_Farm.nether_slots);
+			}
 			else if (Name == "temple_floor") { Words >> g_Farm.temple_floor; g_Farm.temple_floor = (std::min)((std::max)(g_Farm.temple_floor, 0), 3000); }
 			else if (Name == "temple_shrine") { Words >> flag; g_Farm.temple_shrine = flag != 0; }
 			else if (Name == "temple_pure") { Words >> flag; g_Farm.temple_pure = flag != 0; }
@@ -1813,6 +2461,20 @@ namespace
 				<< "farmer.temple_shrine " << (g_Farm.temple_shrine ? 1 : 0) << '\n'
 				<< "farmer.temple_pure " << (g_Farm.temple_pure ? 1 : 0) << '\n'
 				<< "farmer.mode " << g_Farm.mode << '\n'
+				<< "farmer.nether_warlord " << g_Farm.nether_warlord << '\n'
+				<< "farmer.nether_double " << (g_Farm.nether_double ? 1 : 0) << '\n'
+				<< "farmer.nether_primordial " << (g_Farm.nether_primordial ? 1 : 0) << '\n'
+				<< "farmer.nether_best " << (g_Farm.nether_best ? 1 : 0) << '\n'
+				<< "farmer.nether_until " << g_Farm.nether_until << '\n'
+				<< "farmer.nether_pick " << (g_Farm.nether_pick ? 1 : 0) << '\n'
+				<< "farmer.nether_slots_nether " << (g_Farm.nether_slots_nether ? 1 : 0) << '\n'
+				<< "farmer.nether_fallback " << g_Farm.nether_fallback << '\n'
+				<< "farmer.nether_reroll " << (g_Farm.nether_reroll ? 1 : 0) << '\n'
+				<< "farmer.nether_reroll_nether " << (g_Farm.nether_reroll_nether ? 1 : 0) << '\n'
+				<< "farmer.nether_wanted " << g_Farm.nether_wanted << '\n'
+				<< "farmer.nether_keep " << std::fixed << std::setprecision(0) << g_Farm.nether_keep << std::defaultfloat << std::setprecision(6) << '\n'
+				<< "farmer.nether_slots " << g_Farm.nether_slots[0] << ' ' << g_Farm.nether_slots[1] << ' ' << g_Farm.nether_slots[2] << ' ' << g_Farm.nether_slots[3] << ' ' << g_Farm.nether_slots[4] << ' '
+				<< g_Farm.nether_slots[5] << ' ' << g_Farm.nether_slots[6] << ' ' << g_Farm.nether_slots[7] << ' ' << g_Farm.nether_slots[8] << ' ' << g_Farm.nether_slots[9] << '\n'
 				<< "farmer.forge_waves " << g_Farm.forge_waves << '\n'
 				<< "farmer.forge_center " << (g_Farm.forge_center ? 1 : 0) << '\n'
 				<< "farmer.max_runs " << g_Farm.max_runs << '\n'
