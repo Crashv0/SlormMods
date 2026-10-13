@@ -31,7 +31,7 @@ It works through the game's own reforge recipes and pays their normal costs. It 
 Requires The Slormancer on Steam (Windows, 64-bit) and the [Microsoft Visual C++ 2015-2022 Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe).
 
 1. Back up your save folder: `%LocalAppData%\The_Slormancer`
-2. Install [SlormCore](../SlormCore) if the game does not have it yet.
+2. Install [SlormCore](../../SlormCore) if the game does not have it yet.
 3. Download the latest `SlormReforger` zip from [Releases](https://github.com/crashv0/SlormMods/releases).
 4. Open the game folder. In Steam: right-click the game, Manage, Browse local files.
 5. Extract the zip there, so `SlormReforger.dll` lands in `mods\Aurie`.
@@ -62,7 +62,7 @@ Each target shows where it stands: green when met, yellow while there is work to
 
 The Slormancer is a GameMaker game. The mod is a plugin for [YYToolkit](https://github.com/AurieFramework/YYToolkit), which runs on the [Aurie Framework](https://github.com/AurieFramework/Aurie) and gives native code access to the game's scripts. SlormReforger reads the item in the reforge slot, asks the game which stats each tier can roll, and calls the game's own apply script for each reroll, lock and unlock. The window is drawn with [Dear ImGui](https://github.com/ocornut/imgui).
 
-The frameworks come with [SlormCore](../SlormCore), whose small `version.dll` starts Aurie when the game starts, so the game's exe never has to be patched.
+The frameworks come with [SlormCore](../../SlormCore), whose small `version.dll` starts Aurie when the game starts, so the game's exe never has to be patched.
 
 ## Building
 
@@ -77,11 +77,11 @@ Needs Windows with the Visual Studio 2022 Build Tools (C++ workload). The build 
 
 `deploy` needs the game folder: export `SLORM_GAME`, or put `SLORM_GAME="..."` in the `.env` at the top of the repo.
 
-Where the vendored sources come from is listed in [THIRD-PARTY.md](../THIRD-PARTY.md).
+Where the vendored sources come from is listed in [THIRD-PARTY.md](../../THIRD-PARTY.md).
 
 ## License
 
-[AGPL-3.0](../LICENSE). The mod is built against Aurie and YYToolkit, which are AGPL-3.0.
+[AGPL-3.0](../../LICENSE). The mod is built against Aurie and YYToolkit, which are AGPL-3.0.
 
 ## Credits
 

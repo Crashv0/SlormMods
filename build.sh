@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# ./build.sh <mod>          build <mod>/bin/<mod>.dll
+# ./build.sh <mod>          build mods/<mod>/bin/<mod>.dll
 # ./build.sh <mod> deploy   build, then copy into the game folder
 # ./build.sh <mod> play     deploy, then start the game through Steam
-# ./build.sh <mod> package  build, then write <mod>/dist/<mod>-v<version>.zip
-# A mod is the name of its folder, such as SlormSuite. Each folder's own build.sh passes its name.
+# ./build.sh <mod> package  build, then write mods/<mod>/dist/<mod>-v<version>.zip
+# A mod is the name of its folder under mods/, such as SlormSuite. Each folder's own build.sh passes its name.
+# SlormCore and SlormExample sit at the top and are built the same way.
 # SlormCore is the runtime every mod needs: the version.dll proxy, Aurie, YYToolkit and the shared overlay.
 # SLORM_DEV=1 builds a mod's dev variant. Not for release.
 set -euo pipefail
@@ -12,7 +13,9 @@ cd "$(dirname "$0")"
 MOD="${1:-}"
 MOD="${MOD%/}"
 ACTION="${2:-}"
-[ -n "$MOD" ] && [ -f "$MOD/$MOD.vcxproj" ] || { echo "usage: ./build.sh <mod> [deploy|play|package]; mods: $(ls -d */*.vcxproj | cut -d/ -f1 | tr '\n' ' ')" >&2; exit 1; }
+DIR="$MOD"
+[ -f "mods/$MOD/$MOD.vcxproj" ] && DIR="mods/$MOD"
+[ -n "$MOD" ] && [ -f "$DIR/$MOD.vcxproj" ] || { echo "usage: ./build.sh <mod> [deploy|play|package]; mods: $(ls mods/*/*.vcxproj */*.vcxproj | xargs -n1 basename | sed 's/\.vcxproj$//' | grep -v '^Proxy$' | tr '\n' ' ')" >&2; exit 1; }
 
 # "deploy" and "play" need the game folder: export SLORM_GAME, or put SLORM_GAME="..." in .env (untracked).
 [ -f .env ] && . ./.env
@@ -35,11 +38,11 @@ if [ -n "${SLORM_DEV:-}" ]; then
 	export CL=/DSLORM_DEV WSLENV="${WSLENV:+$WSLENV:}CL"
 fi
 # MSBuild does not see the define change, so rebuild when the variant does.
-mkdir -p "$MOD/obj"
-[ "$(cat "$MOD/obj/variant" 2>/dev/null)" = "$VARIANT" ] || find "$MOD/source" -name '*.cpp' -exec touch {} +
-echo "$VARIANT" > "$MOD/obj/variant"
+mkdir -p "$DIR/obj"
+[ "$(cat "$DIR/obj/variant" 2>/dev/null)" = "$VARIANT" ] || find "$DIR/source" -name '*.cpp' -exec touch {} +
+echo "$VARIANT" > "$DIR/obj/variant"
 
-"$(wslpath -u "$MSBUILD_WIN")" "$(wslpath -w "$MOD/$MOD.vcxproj")" -nologo -v:minimal -p:Configuration=Release -p:Platform=x64
+"$(wslpath -u "$MSBUILD_WIN")" "$(wslpath -w "$DIR/$MOD.vcxproj")" -nologo -v:minimal -p:Configuration=Release -p:Platform=x64
 # SlormCore is two DLLs: the overlay host above and the version.dll proxy.
 [ "$MOD" != SlormCore ] || "$(wslpath -u "$MSBUILD_WIN")" "$(wslpath -w SlormCore/Proxy.vcxproj)" -nologo -v:minimal -p:Configuration=Release -p:Platform=x64
 
@@ -64,7 +67,7 @@ if [ "$ACTION" = deploy ] || [ "$ACTION" = play ]; then
 		copy() { cp SlormCore/bin/version.dll "$GAME/" && cp redist/AurieCore.dll "$GAME/mods/Native/" && cp redist/YYToolkit.dll SlormCore/bin/SlormCore.dll "$GAME/mods/Aurie/"; }
 	else
 		[ -f "$GAME/version.dll" ] && [ -d "$GAME/mods/Aurie" ] || { echo "the game has no runtime: ./build.sh SlormCore deploy" >&2; exit 1; }
-		copy() { cp "$MOD/bin/$MOD.dll" "$GAME/mods/Aurie/"; }
+		copy() { cp "$DIR/bin/$MOD.dll" "$GAME/mods/Aurie/"; }
 	fi
 	# The list is read whole: a grep that stops early would fail the pipe.
 	running() { [ "$(tasklist.exe 2>/dev/null | grep -ci "^The Slormancer.exe")" != 0 ]; }
@@ -97,19 +100,19 @@ if [ "$ACTION" = deploy ] || [ "$ACTION" = play ]; then
 fi
 
 if [ "$ACTION" = package ]; then
-	VERSION=$(sed -n 's/^#define [A-Z]*_VERSION "\(.*\)"/\1/p' "$MOD/source/Version.hpp")
-	[ -n "$VERSION" ] || { echo "no version in $MOD/source/Version.hpp" >&2; exit 1; }
-	mkdir -p "$MOD/dist"
-	rm -f "$MOD/dist/$MOD-v$VERSION.zip"
+	VERSION=$(sed -n 's/^#define [A-Z]*_VERSION "\(.*\)"/\1/p' "$DIR/source/Version.hpp")
+	[ -n "$VERSION" ] || { echo "no version in $DIR/source/Version.hpp" >&2; exit 1; }
+	mkdir -p "$DIR/dist"
+	rm -f "$DIR/dist/$MOD-v$VERSION.zip"
 
 	[ "$MOD" != SlormCore ] || redist
 	# Laid out to be extracted straight into the game folder.
-	python3 - "$MOD" "$MOD/dist/$MOD-v$VERSION.zip" <<'PY'
+	python3 - "$MOD" "$DIR" "$DIR/dist/$MOD-v$VERSION.zip" <<'PY'
 import sys, zipfile
-mod, target = sys.argv[1], sys.argv[2]
+mod, folder, target = sys.argv[1], sys.argv[2], sys.argv[3]
 files = {
-    f"{mod}-README.txt": f"{mod}/packaging/README.txt",
-    f"mods/licenses/{mod}-NOTICE.txt": f"{mod}/packaging/NOTICE.txt",
+    f"{mod}-README.txt": f"{folder}/packaging/README.txt",
+    f"mods/licenses/{mod}-NOTICE.txt": f"{folder}/packaging/NOTICE.txt",
     "mods/licenses/AGPL-3.0.txt": "LICENSE",
 }
 # A mod's zip holds the mod alone; the runtime is SlormCore's.
@@ -121,13 +124,13 @@ if mod == "SlormCore":
         "mods/Aurie/SlormCore.dll": "SlormCore/bin/SlormCore.dll",
     }
 else:
-    files[f"mods/Aurie/{mod}.dll"] = f"{mod}/bin/{mod}.dll"
+    files[f"mods/Aurie/{mod}.dll"] = f"{folder}/bin/{mod}.dll"
 # Only what draws on the overlay is built with Dear ImGui.
-if "imgui" in open(f"{mod}/{mod}.vcxproj").read():
+if "imgui" in open(f"{folder}/{mod}.vcxproj").read():
     files["mods/licenses/DearImGui-MIT.txt"] = "vendor/imgui/LICENSE.txt"
 with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
     for name, source in files.items():
         archive.write(source, name)
 PY
-	echo "wrote $MOD/dist/$MOD-v$VERSION.zip"
+	echo "wrote $DIR/dist/$MOD-v$VERSION.zip"
 fi

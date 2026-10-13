@@ -9,8 +9,8 @@
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
-    <ProjectGuid>{9c4e2d71-3a58-4f06-b1d9-0e6a7c5f8b23}</ProjectGuid>
-    <RootNamespace>SlormHUD</RootNamespace>
+    <ProjectGuid>{6f0f1f0e-6d0b-4b7e-9d3a-51c0a3e7b2a1}</ProjectGuid>
+    <RootNamespace>SlormReforger</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -35,7 +35,7 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\include;$(ProjectDir)..\vendor\imgui;$(ProjectDir)..\vendor\imgui\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\..\include;$(ProjectDir)..\..\vendor\imgui;$(ProjectDir)..\..\vendor\imgui\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -45,20 +45,20 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="..\include\YYToolkit\YYTK_Shared_Types.cpp" />
+    <ClCompile Include="..\..\include\YYToolkit\YYTK_Shared_Types.cpp" />
     <ClCompile Include="source\GameData.cpp" />
-    <ClCompile Include="source\Planner.cpp" />
     <ClCompile Include="source\ModuleMain.cpp" />
     <ClCompile Include="source\Overlay.cpp" />
-    <ClCompile Include="..\vendor\imgui\imgui.cpp" />
-    <ClCompile Include="..\vendor\imgui\imgui_draw.cpp" />
-    <ClCompile Include="..\vendor\imgui\imgui_tables.cpp" />
-    <ClCompile Include="..\vendor\imgui\imgui_widgets.cpp" />
-    <ClCompile Include="..\vendor\imgui\backends\imgui_impl_dx11.cpp" />
-    <ClCompile Include="..\vendor\imgui\backends\imgui_impl_win32.cpp" />
+    <ClCompile Include="source\Planner.cpp" />
+    <ClCompile Include="..\..\vendor\imgui\imgui.cpp" />
+    <ClCompile Include="..\..\vendor\imgui\imgui_draw.cpp" />
+    <ClCompile Include="..\..\vendor\imgui\imgui_tables.cpp" />
+    <ClCompile Include="..\..\vendor\imgui\imgui_widgets.cpp" />
+    <ClCompile Include="..\..\vendor\imgui\backends\imgui_impl_dx11.cpp" />
+    <ClCompile Include="..\..\vendor\imgui\backends\imgui_impl_win32.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="SlormHUD.rc" />
+    <ResourceCompile Include="SlormReforger.rc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

@@ -9,8 +9,8 @@
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
-    <ProjectGuid>{9e2c5d17-83ab-4f60-b1d4-6a7c0e3f5b28}</ProjectGuid>
-    <RootNamespace>NoSlipperyIce</RootNamespace>
+    <ProjectGuid>{c3a81f5e-27d4-4b96-8e0a-5f1d9b6c2e73}</ProjectGuid>
+    <RootNamespace>SlormReslormitizer</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -35,7 +35,7 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
-      <AdditionalIncludeDirectories>$(ProjectDir)..\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\..\include;$(ProjectDir)..\..\vendor\imgui;$(ProjectDir)..\..\vendor\imgui\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -45,11 +45,17 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="..\include\YYToolkit\YYTK_Shared_Types.cpp" />
-    <ClCompile Include="source\ModuleMain.cpp" />
+    <ClCompile Include="..\..\include\YYToolkit\YYTK_Shared_Types.cpp" />
+    <ClCompile Include="source\*.cpp" />
+    <ClCompile Include="..\..\vendor\imgui\imgui.cpp" />
+    <ClCompile Include="..\..\vendor\imgui\imgui_draw.cpp" />
+    <ClCompile Include="..\..\vendor\imgui\imgui_tables.cpp" />
+    <ClCompile Include="..\..\vendor\imgui\imgui_widgets.cpp" />
+    <ClCompile Include="..\..\vendor\imgui\backends\imgui_impl_dx11.cpp" />
+    <ClCompile Include="..\..\vendor\imgui\backends\imgui_impl_win32.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="NoSlipperyIce.rc" />
+    <ResourceCompile Include="SlormReslormitizer.rc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

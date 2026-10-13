@@ -7,7 +7,7 @@ The floor is never iced and the hero never slides, wherever the cataclysm would 
 ## Install
 
 1. Back up your save: `%LocalAppData%\The_Slormancer`
-2. Install [SlormCore](../SlormCore) if the game does not have it yet.
+2. Install [SlormCore](../../SlormCore) if the game does not have it yet.
 3. Download the latest `NoSlipperyIce` zip from [Releases](https://github.com/crashv0/SlormMods/releases).
 4. Extract it into the game folder, so `NoSlipperyIce.dll` lands in `mods\Aurie`.
 5. Start the game from Steam as usual.
@@ -30,4 +30,4 @@ Needs Windows with VS 2022 Build Tools (C++ workload), run from WSL.
 ./build.sh package  # dist/NoSlipperyIce-v<version>.zip
 ```
 
-Built on [Aurie](https://github.com/AurieFramework/Aurie) and [YYToolkit](https://github.com/AurieFramework/YYToolkit); see [THIRD-PARTY.md](../THIRD-PARTY.md). Licensed under AGPL-3.0.
+Built on [Aurie](https://github.com/AurieFramework/Aurie) and [YYToolkit](https://github.com/AurieFramework/YYToolkit); see [THIRD-PARTY.md](../../THIRD-PARTY.md). Licensed under AGPL-3.0.

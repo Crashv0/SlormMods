@@ -16,7 +16,7 @@ Nothing is activated unless the numbers the game itself shows meet your targets.
 ## Install
 
 1. Back up your save: `%LocalAppData%\The_Slormancer`
-2. Install [SlormCore](../SlormCore) if the game does not have it yet.
+2. Install [SlormCore](../../SlormCore) if the game does not have it yet.
 3. Download the latest `SlormReslormitizer` zip from [Releases](https://github.com/crashv0/SlormMods/releases).
 4. Extract it into the game folder, so `SlormReslormitizer.dll` lands in `mods\Aurie`.
 5. Start the game from Steam as usual.
@@ -36,4 +36,4 @@ Needs Windows with VS 2022 Build Tools (C++ workload), run from WSL.
 
 `SLORM_DEV=1` builds the dev variant, which logs the game's Slormitizer calls and samples its odds on F10.
 
-Built on [Aurie](https://github.com/AurieFramework/Aurie), [YYToolkit](https://github.com/AurieFramework/YYToolkit) and [Dear ImGui](https://github.com/ocornut/imgui); see [THIRD-PARTY.md](../THIRD-PARTY.md). Licensed under AGPL-3.0.
+Built on [Aurie](https://github.com/AurieFramework/Aurie), [YYToolkit](https://github.com/AurieFramework/YYToolkit) and [Dear ImGui](https://github.com/ocornut/imgui); see [THIRD-PARTY.md](../../THIRD-PARTY.md). Licensed under AGPL-3.0.

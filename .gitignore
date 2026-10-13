@@ -1,6 +1,6 @@
 bin/
 obj/
 dist/
-*/nexus/page.md
+**/nexus/page.md
 .env
 redist/
