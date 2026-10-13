@@ -798,10 +798,15 @@ static void GreatForge(CInstance* Self, CInstance* Hero, ULONGLONG Now)
 		RValue stand = g_Yytk->CallBuiltin("asset_get_index", { RValue("obj_empty_item") });
 		int stands = static_cast<int>(ToNumber(g_Yytk->CallBuiltin("instance_number", { stand })));
 		double left = 1e9, right = -1e9, top = 1e9, bottom = -1e9;
+	// Held at the middle, the hero goes out for a while to enemies that have stopped falling.
+	static ULONGLONG fell_at = 0, hunt_until = 0;
+	static int standing = 0;
 		for (int i = 0; i < stands; i++)
 		{
 			RValue it = g_Yytk->CallBuiltin("instance_find", { stand, RValue(static_cast<double>(i)) });
 			double x = ToNumber(g_Yytk->CallBuiltin("variable_instance_get", { it, RValue("x") })), y = ToNumber(g_Yytk->CallBuiltin("variable_instance_get", { it, RValue("y") }));
+		hunt_until = 0;
+		standing = 0;
 			left = (std::min)(left, x), right = (std::max)(right, x), top = (std::min)(top, y), bottom = (std::max)(bottom, y);
 		}
 		if (stands >= 4)
@@ -891,14 +896,39 @@ static void GreatForge(CInstance* Self, CInstance* Hero, ULONGLONG Now)
 	{
 		quiet_at = Now;
 		// They come to the hero; ones still far off, where they are let in, are waited for at the middle.
-		if (g_Farm.forge_center || Far(enemies[0], me) > 280)
+		if (hunt_until)
+		{
+			if (Far(enemies[0], me) > CLOSE)
+				Go(enemies[0], Now);
+		}
+		else if (g_Farm.forge_center || Far(enemies[0], me) > 280)
 		{
 			if (Far(me, home) > (g_Farm.forge_center ? 45 : 90))
 				Go(home, Now, 24);
 		}
 		else if (Far(enemies[0], me) > CLOSE)
 			Go(enemies[0], Now);
-		snprintf(text, sizeof(text), "fighting wave %d of %d", waves, g_Farm.forge_waves);
+		snprintf(text, sizeof(text), hunt_until ? "going out to the enemies left, wave %d of %d" : "fighting wave %d of %d", waves, g_Farm.forge_waves);
+		int count = static_cast<int>(enemies.size());
+		if (standing == 0 || count < standing)
+		{
+			fell_at = Now;
+			// A few left are seen off before going back.
+			if (hunt_until)
+				hunt_until = count <= 6 ? Now + 12000 : Now;
+		}
+		standing = count;
+		if (hunt_until && Now >= hunt_until)
+		{
+			hunt_until = 0;
+			fell_at = Now;
+			Log("bot: back to the forge's middle, %d standing", count);
+		}
+		if (g_Farm.forge_center && !hunt_until && Now - fell_at > 6000)
+		{
+			hunt_until = Now + 12000;
+			Log("bot: none of %d fell for a while, going out to the nearest, a %s %.0f away", count, g_Nearest.c_str(), Far(enemies[0], me));
+		}
 		return Say(text);
 	}
 	if (last)
@@ -910,6 +940,8 @@ static void GreatForge(CInstance* Self, CInstance* Hero, ULONGLONG Now)
 		return Say("waiting for the last wave to end");
 	}
 	// A wave the game has not started by itself is started with its button.
+	standing = 0;
+	hunt_until = 0;
 	if (between && menu == "none" && Now - quiet_at > 1500 && Now - between_at > 1500 && Now > acted + 4000 && !release_at)
 	{
 		acted = Now;
@@ -1445,7 +1477,7 @@ namespace
 				changed |= ImGui::SliderInt("Fight to this wave, open War Chest and head home", &g_Farm.forge_waves, 1, 100, "%d", ImGuiSliderFlags_AlwaysClamp);
 				changed |= ImGui::Checkbox("Keep hero at center", &g_Farm.forge_center);
 				if (ImGui::IsItemHovered())
-					ImGui::SetTooltip("The hero holds the center of the forge and lets the enemies come.\nOff, it walks at the nearest ones.");
+					ImGui::SetTooltip("The hero holds the center of the forge and lets the enemies come,\ngoing out to them for a while when none has fallen for 6 seconds.\nOff, it walks at the nearest ones.");
 				ImGui::Unindent();
 			}
 			else
