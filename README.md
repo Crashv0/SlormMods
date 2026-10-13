@@ -6,6 +6,9 @@ Mods for [The Slormancer](https://store.steampowered.com/app/1104280/The_Slorman
 |---|---|
 | [SlormCore](SlormCore) | The runtime every mod needs. Install it first. |
 | [SlormSuite](SlormSuite) | A collection of smaller mods behind one overlay. |
+| [SlormReforger](SlormReforger) | Automatic reforging at Friedrich's blacksmith. |
+| [SlormHUD](SlormHUD) | Follow a slorm-planner build inside the game. |
+| [SlormReslormitizer](SlormReslormitizer) | Operates Rick Manalan's Slormitizer for the odds you ask for. |
 | [NoSlipperyIce](NoSlipperyIce) | Removes the Slippery Ice cataclysm. |
 | [SlormExample](SlormExample) | A one-file mod with a tab on the overlay, to copy when starting a mod. |
 
