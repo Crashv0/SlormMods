@@ -79,8 +79,8 @@ On the Mods tab. Walking up to the Mage Academy entrance starts the Bastion with
 Needs VS 2022 Build Tools with the C++ workload, run from WSL.
 
 ```
-./build.sh          # bin/SlormSuite.dll and the bin/version.dll proxy
-./build.sh deploy   # also copies into the game's mods/Aurie (set SLORM_GAME or .env)
+./build.sh          # bin/SlormSuite.dll here, and the version.dll proxy in the bin/ at the top of the repo
+./build.sh deploy   # also copies into the game's mods/Aurie (set SLORM_GAME, or put it in the .env at the top of the repo)
 ./build.sh play     # deploy, then start the game through Steam
 ./build.sh package  # dist/SlormSuite-v<version>.zip
 ```

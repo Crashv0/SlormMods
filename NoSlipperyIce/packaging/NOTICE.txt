@@ -1,7 +1,7 @@
 This download contains the following components.
 
 NoSlipperyIce
-  https://github.com/wistb/NoSlipperyIce
+  https://github.com/crashv0/SlormMods
   GNU Affero General Public License v3.0 (AGPL-3.0.txt)
   Files: mods\Aurie\NoSlipperyIce.dll, version.dll
 

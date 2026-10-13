@@ -7,7 +7,7 @@ The floor is never iced and the hero never slides, wherever the cataclysm would 
 ## Install
 
 1. Back up your save: `%LocalAppData%\The_Slormancer`
-2. Download the latest zip from [Releases](../../releases).
+2. Download the latest zip from [Releases](https://github.com/crashv0/SlormMods/releases).
 3. Extract it into the game folder, so `version.dll` sits next to `The Slormancer.exe`.
 4. Start the game from Steam as usual.
 
@@ -23,8 +23,9 @@ The game's own files are never changed. To uninstall, delete `mods\Aurie\NoSlipp
 Needs Windows with VS 2022 Build Tools (C++ workload), run from WSL.
 
 ```
-./build.sh          # bin/NoSlipperyIce.dll and the version.dll proxy
-./build.sh deploy   # also copy into the game's mods/Aurie (set SLORM_GAME, or put it in .env)
+./build.sh          # bin/NoSlipperyIce.dll here, and the version.dll proxy in the bin/ at the top of the repo
+./build.sh deploy   # also copy into the game's mods/Aurie (set SLORM_GAME, or put it in the .env at the top of the repo)
+./build.sh play     # deploy, then start the game through Steam
 ./build.sh package  # dist/NoSlipperyIce-v<version>.zip
 ```
 
