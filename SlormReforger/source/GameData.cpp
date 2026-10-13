@@ -1,0 +1,339 @@
+#include "Reforger.hpp"
+#include <algorithm>
+#include <cmath>
+#include <fstream>
+#include <sstream>
+
+using namespace Aurie;
+
+std::vector<StatInfo> g_Stats;
+int g_HeroClass = 0;
+
+static std::map<int, std::string> g_Smiths, g_Traits, g_Skills[3];
+struct Legendary
+{
+	std::string name;
+	std::string slot;
+	// -1 any class, 0-2 one class; the game also uses 99 and 999.
+	int hero = -1;
+	bool lootable = true;
+	// Base values the roll scales (RANGE 1).
+	std::vector<double> ranged;
+};
+static std::map<int, Legendary> g_Legendaries;
+
+using Row = std::map<std::string, std::string>;
+
+static std::string Base64Decode(const std::string& Text)
+{
+	std::string out;
+	unsigned buffer = 0;
+	int bits = 0;
+	for (unsigned char c : Text)
+	{
+		int value;
+		if (c >= 'A' && c <= 'Z') value = c - 'A';
+		else if (c >= 'a' && c <= 'z') value = c - 'a' + 26;
+		else if (c >= '0' && c <= '9') value = c - '0' + 52;
+		else if (c == '+') value = 62;
+		else if (c == '/') value = 63;
+		else continue;
+		buffer = (buffer << 6) | value;
+		bits += 6;
+		if (bits >= 8)
+		{
+			bits -= 8;
+			out.push_back(static_cast<char>((buffer >> bits) & 0xFF));
+		}
+	}
+	return out;
+}
+
+// Just enough JSON for the game's tables: an array of flat objects.
+struct Parser
+{
+	const std::string& text;
+	size_t at = 0;
+
+	void Space() { while (at < text.size() && isspace(static_cast<unsigned char>(text[at]))) at++; }
+
+	std::string String()
+	{
+		std::string out;
+		at++;
+		while (at < text.size() && text[at] != '"')
+		{
+			char c = text[at++];
+			if (c != '\\' || at >= text.size()) { out.push_back(c); continue; }
+			char escape = text[at++];
+			if (escape == 'n') out.push_back('\n');
+			else if (escape == 't') out.push_back('\t');
+			else if (escape == 'u' && at + 4 <= text.size())
+			{
+				unsigned code = std::stoul(text.substr(at, 4), nullptr, 16);
+				at += 4;
+				if (code < 0x80) out.push_back(static_cast<char>(code));
+				else if (code < 0x800) { out.push_back(static_cast<char>(0xC0 | (code >> 6))); out.push_back(static_cast<char>(0x80 | (code & 0x3F))); }
+				else { out.push_back(static_cast<char>(0xE0 | (code >> 12))); out.push_back(static_cast<char>(0x80 | ((code >> 6) & 0x3F))); out.push_back(static_cast<char>(0x80 | (code & 0x3F))); }
+			}
+			else out.push_back(escape);
+		}
+		at++;
+		return out;
+	}
+
+	// Scalars come back as text; nested containers are skipped.
+	std::string Value()
+	{
+		Space();
+		if (at >= text.size())
+			return "";
+		if (text[at] == '"')
+			return String();
+		if (text[at] == '{' || text[at] == '[')
+		{
+			int depth = 0;
+			do
+			{
+				if (text[at] == '"') { String(); continue; }
+				if (text[at] == '{' || text[at] == '[') depth++;
+				if (text[at] == '}' || text[at] == ']') depth--;
+				at++;
+			} while (depth > 0 && at < text.size());
+			return "";
+		}
+		size_t start = at;
+		while (at < text.size() && text[at] != ',' && text[at] != '}' && text[at] != ']' && !isspace(static_cast<unsigned char>(text[at]))) at++;
+		std::string word = text.substr(start, at - start);
+		return word == "null" ? "" : word;
+	}
+
+	std::vector<Row> Rows()
+	{
+		std::vector<Row> rows;
+		Space();
+		if (at >= text.size() || text[at] != '[')
+			return rows;
+		at++;
+		while (true)
+		{
+			Space();
+			if (at >= text.size() || text[at] != '{')
+				break;
+			at++;
+			Row row;
+			while (true)
+			{
+				Space();
+				if (at >= text.size() || text[at] != '"')
+					break;
+				std::string key = String();
+				Space();
+				if (at < text.size() && text[at] == ':') at++;
+				row[key] = Value();
+				Space();
+				if (at < text.size() && text[at] == ',') at++;
+			}
+			if (at < text.size() && text[at] == '}') at++;
+			rows.push_back(std::move(row));
+			Space();
+			if (at < text.size() && text[at] == ',') at++;
+		}
+		return rows;
+	}
+};
+
+static std::vector<Row> LoadTable(const fs::path& Path)
+{
+	std::ifstream file(Path, std::ios::binary);
+	if (!file)
+		return {};
+	std::stringstream content;
+	content << file.rdbuf();
+	// Some tables are base64-wrapped, some are plain JSON.
+	std::string text = content.str();
+	if (text.rfind("\xEF\xBB\xBF", 0) == 0)
+		text.erase(0, 3);
+	if (text.find_first_of("[{") != text.find_first_not_of(" \t\r\n"))
+		text = Base64Decode(text);
+	try { return Parser{ text }.Rows(); }
+	catch (...) { return {}; }
+}
+
+void LoadGameData()
+{
+	wchar_t exe[MAX_PATH] = {};
+	GetModuleFileNameW(nullptr, exe, MAX_PATH);
+	fs::path game = fs::path(exe).parent_path();
+
+	std::map<std::string, std::string> names;
+	for (Row& row : LoadTable(game / "dat_str.json"))
+		if (!row["EN"].empty()) names[row["REF"]] = row["EN"];
+
+	std::lock_guard guard(g_Lock);
+	for (const auto& [ref, name] : names)
+	{
+		try
+		{
+			if (ref.rfind("weapon_reapersmith_", 0) == 0 && ref.find('_', 19) == std::string::npos) g_Smiths[std::stoi(ref.substr(19))] = name;
+			if (ref.rfind("character_trait_", 0) == 0 && ref.find('_', 16) == std::string::npos) g_Traits[std::stoi(ref.substr(16))] = name;
+		}
+		catch (...) {}
+	}
+	for (int hero = 0; hero < 3; hero++)
+	{
+		for (Row& row : LoadTable(game / ("dat_cla_" + std::to_string(hero) + ".json")))
+		{
+			if (row["TYPE"] != "support" && row["TYPE"] != "active")
+				continue;
+			try { g_Skills[hero][std::stoi(row["REF"])] = row["EN_NAME"]; }
+			catch (...) {}
+		}
+	}
+	for (Row& row : LoadTable(game / "dat_leg.json"))
+	{
+		try
+		{
+			Legendary legendary;
+			legendary.name = row["EN_NAME"];
+			legendary.slot = Lower(row["ITEM"]);
+			legendary.lootable = Lower(row["LOOTABLE"]) != "false" && row["LOOTABLE"] != "0";
+			try { legendary.hero = std::stoi(row["HERO"]); }
+			catch (...) {}
+			std::stringstream values(row["VALUE"]), ranges(row["RANGE"]);
+			for (std::string value, range; std::getline(values, value, '|') && std::getline(ranges, range, '|');)
+			{
+				try { if (std::stod(range) == 1) legendary.ranged.push_back(std::stod(value)); }
+				catch (...) {}
+			}
+			g_Legendaries[std::stoi(row["REF"])] = legendary;
+		}
+		catch (...) {}
+	}
+	g_Stats.clear();
+	for (Row& row : LoadTable(game / "dat_sta.json"))
+	{
+		StatInfo stat;
+		stat.ref = row["REF"];
+		if (stat.ref.empty())
+			continue;
+		auto name = names.find(stat.ref);
+		stat.name = name != names.end() ? name->second : stat.ref;
+		stat.label = stat.name;
+		if (row["PERCENT"] == "%")
+			stat.name += " %";
+		stat.columns = std::move(row);
+		g_Stats.push_back(std::move(stat));
+	}
+}
+
+const StatInfo* FindStat(const std::string& Ref)
+{
+	for (const StatInfo& stat : g_Stats)
+		if (stat.ref == Ref) return &stat;
+	return nullptr;
+}
+
+// What the game shows for a base value at a roll, before reinforcement: banker's rounding, whole and at least 1.
+static double LegendaryShown(double Value, double Roll)
+{
+	double scaled = std::round(Value * Roll / 100 * 1e6) / 1e6;
+	// The game keeps a decimal for these two.
+	if (Value == 2.5 || Value == 0.6)
+		return std::nearbyint(scaled * 10) / 10;
+	return (std::max)(1.0, std::nearbyint(scaled));
+}
+
+bool LegendaryGains(int Id, double From, double To)
+{
+	auto found = g_Legendaries.find(Id);
+	// Unknown legendary: assume the roll counts.
+	if (found == g_Legendaries.end())
+		return true;
+	for (double value : found->second.ranged)
+		if (LegendaryShown(value, To) != LegendaryShown(value, From)) return true;
+	return false;
+}
+
+std::string LegendaryName(int Id)
+{
+	auto found = g_Legendaries.find(Id);
+	return found != g_Legendaries.end() && !found->second.name.empty() ? found->second.name : "legendary " + std::to_string(Id);
+}
+
+std::vector<std::pair<std::string, std::string>> SpecialStats(const std::string& Tier, int Hero)
+{
+	if (Hero < 0) Hero = g_HeroClass;
+	if (IsLegendaryTier(Tier))
+	{
+		// Another class's legendaries cannot roll; without an item every slot is listed.
+		std::vector<std::pair<std::string, std::string>> legendaries;
+		std::string slot = g_HasItem ? Lower(g_ItemSlot) : "";
+		for (const auto& [id, legendary] : g_Legendaries)
+		{
+			if (!legendary.lootable || (!slot.empty() && legendary.slot != slot))
+				continue;
+			if (legendary.hero >= 0 && legendary.hero <= 2 && legendary.hero != Hero)
+				continue;
+			legendaries.emplace_back("leg_" + std::to_string(id), legendary.name);
+		}
+		std::sort(legendaries.begin(), legendaries.end(), [](const auto& a, const auto& b) { return a.second < b.second; });
+		return legendaries;
+	}
+	std::vector<std::pair<std::string, std::string>> out;
+	const std::map<int, std::string>& names = Tier == "RP" ? g_Smiths : Tier == "AT" ? g_Traits : g_Skills[Hero >= 0 && Hero < 3 ? Hero : 0];
+	const char* suffix = Tier == "RP" ? " Affinity" : Tier == "MA" ? " Mastery" : "";
+	for (const auto& [id, name] : names)
+		out.emplace_back(Lower(Tier) + "_" + std::to_string(id), name + suffix);
+	return out;
+}
+
+bool Grafted(const std::string& Tier, const std::string& Stat)
+{
+	if (!g_HasItem || IsSpecialTier(Tier))
+		return false;
+	std::string slot = Lower(g_ItemSlot);
+	if (IsLegendaryTier(Tier))
+	{
+		try
+		{
+			auto found = g_Legendaries.find(std::stoi(Stat.substr(Stat.rfind('_') + 1)));
+			return found != g_Legendaries.end() && !found->second.slot.empty() && found->second.slot != slot;
+		}
+		catch (...) { return false; }
+	}
+	const StatInfo* stat = FindStat(Stat);
+	if (!stat)
+		return false;
+	std::string column = slot == "body" ? "ARMOR" : slot;
+	std::transform(column.begin(), column.end(), column.begin(), [](unsigned char c) { return static_cast<char>(toupper(c)); });
+	auto found = stat->columns.find(column);
+	std::string pool = found != stat->columns.end() ? found->second : "";
+	// Normal rolls the slot's primary stats, magic and rare its secondary ones too, epic the secondary and epic ones.
+	if (Tier == "N") return pool != "P";
+	if (Tier == "M" || Tier == "R") return pool != "P" && pool != "S";
+	if (Tier == "E") return pool != "S" && pool != "E";
+	return pool.empty();
+}
+
+std::string StatName(const std::string& Ref, int Hero)
+{
+	if (Ref.rfind("leg_", 0) == 0)
+	{
+		try { return LegendaryName(std::stoi(Ref.substr(4))); }
+		catch (...) { return Ref; }
+	}
+	if (Ref.size() > 3 && Ref[2] == '_')
+	{
+		std::string tier = Ref.substr(0, 2);
+		for (char& c : tier) c = static_cast<char>(toupper(static_cast<unsigned char>(c)));
+		if (IsSpecialTier(tier))
+		{
+			for (const auto& [ref, name] : SpecialStats(tier, Hero))
+				if (ref == Ref) return name;
+			return tier + " " + Ref.substr(3);
+		}
+	}
+	const StatInfo* stat = FindStat(Ref);
+	return stat ? stat->name : Ref;
+}
