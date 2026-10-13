@@ -1,0 +1,401 @@
+#include "Hud.hpp"
+#include <algorithm>
+#include <cmath>
+#include <fstream>
+#include <sstream>
+
+using namespace Aurie;
+
+std::vector<StatInfo> g_Stats;
+
+struct SkillInfo
+{
+	std::string name;
+	// "support", "active", "upgrade" or "passive".
+	std::string type;
+	// For an upgrade, the skill it belongs to.
+	int parent = -1;
+};
+static std::map<int, SkillInfo> g_Skills[3];
+static std::map<int, std::string> g_Smiths, g_Traits, g_Ultimatums, g_Weapons;
+static std::map<int, int> g_LegacyRealms, g_ReaperOrders, g_LegendarySlots;
+static std::map<int, WarlordInfo> g_Warlords;
+
+const char* const GEAR_SLOT_REFS[SLOT_KINDS] = { "helm", "body", "shoulder", "bracer", "glove", "boot", "ring", "amulet", "belt", "cape" };
+const char* const GEAR_SLOT_NAMES[SLOT_KINDS] = { "Helm", "Armor", "Shoulder", "Bracer", "Glove", "Boot", "Ring", "Amulet", "Belt", "Cape" };
+// Base values the roll scales (RANGE 1), per legendary.
+static std::map<int, std::vector<double>> g_LegendaryRanges;
+static std::map<int, std::string> g_Legacies, g_Reapers, g_Runes, g_Activables, g_Legendaries;
+
+using Row = std::map<std::string, std::string>;
+
+static std::string Base64Decode(const std::string& Text)
+{
+	std::string out;
+	unsigned buffer = 0;
+	int bits = 0;
+	for (unsigned char c : Text)
+	{
+		int value;
+		if (c >= 'A' && c <= 'Z') value = c - 'A';
+		else if (c >= 'a' && c <= 'z') value = c - 'a' + 26;
+		else if (c >= '0' && c <= '9') value = c - '0' + 52;
+		else if (c == '+') value = 62;
+		else if (c == '/') value = 63;
+		else continue;
+		buffer = (buffer << 6) | value;
+		bits += 6;
+		if (bits >= 8)
+		{
+			bits -= 8;
+			out.push_back(static_cast<char>((buffer >> bits) & 0xFF));
+		}
+	}
+	return out;
+}
+
+// Just enough JSON for the game's tables: an array of flat objects.
+struct Parser
+{
+	const std::string& text;
+	size_t at = 0;
+
+	void Space() { while (at < text.size() && isspace(static_cast<unsigned char>(text[at]))) at++; }
+
+	std::string String()
+	{
+		std::string out;
+		at++;
+		while (at < text.size() && text[at] != '"')
+		{
+			char c = text[at++];
+			if (c != '\\' || at >= text.size()) { out.push_back(c); continue; }
+			char escape = text[at++];
+			if (escape == 'n') out.push_back('\n');
+			else if (escape == 't') out.push_back('\t');
+			else if (escape == 'u' && at + 4 <= text.size())
+			{
+				unsigned code = std::stoul(text.substr(at, 4), nullptr, 16);
+				at += 4;
+				if (code < 0x80) out.push_back(static_cast<char>(code));
+				else if (code < 0x800) { out.push_back(static_cast<char>(0xC0 | (code >> 6))); out.push_back(static_cast<char>(0x80 | (code & 0x3F))); }
+				else { out.push_back(static_cast<char>(0xE0 | (code >> 12))); out.push_back(static_cast<char>(0x80 | ((code >> 6) & 0x3F))); out.push_back(static_cast<char>(0x80 | (code & 0x3F))); }
+			}
+			else out.push_back(escape);
+		}
+		at++;
+		return out;
+	}
+
+	// Scalars come back as text; nested containers are skipped.
+	std::string Value()
+	{
+		Space();
+		if (at >= text.size())
+			return "";
+		if (text[at] == '"')
+			return String();
+		if (text[at] == '{' || text[at] == '[')
+		{
+			int depth = 0;
+			do
+			{
+				if (text[at] == '"') { String(); continue; }
+				if (text[at] == '{' || text[at] == '[') depth++;
+				if (text[at] == '}' || text[at] == ']') depth--;
+				at++;
+			} while (depth > 0 && at < text.size());
+			return "";
+		}
+		size_t start = at;
+		while (at < text.size() && text[at] != ',' && text[at] != '}' && text[at] != ']' && !isspace(static_cast<unsigned char>(text[at]))) at++;
+		std::string word = text.substr(start, at - start);
+		return word == "null" ? "" : word;
+	}
+
+	std::vector<Row> Rows()
+	{
+		std::vector<Row> rows;
+		Space();
+		if (at >= text.size() || text[at] != '[')
+			return rows;
+		at++;
+		while (true)
+		{
+			Space();
+			if (at >= text.size() || text[at] != '{')
+				break;
+			at++;
+			Row row;
+			while (true)
+			{
+				Space();
+				if (at >= text.size() || text[at] != '"')
+					break;
+				std::string key = String();
+				Space();
+				if (at < text.size() && text[at] == ':') at++;
+				row[key] = Value();
+				Space();
+				if (at < text.size() && text[at] == ',') at++;
+			}
+			if (at < text.size() && text[at] == '}') at++;
+			rows.push_back(std::move(row));
+			Space();
+			if (at < text.size() && text[at] == ',') at++;
+		}
+		return rows;
+	}
+};
+
+static std::vector<Row> LoadTable(const fs::path& Path)
+{
+	std::ifstream file(Path, std::ios::binary);
+	if (!file)
+		return {};
+	std::stringstream content;
+	content << file.rdbuf();
+	// Some tables are base64-wrapped, some are plain JSON.
+	std::string text = content.str();
+	if (text.rfind("\xEF\xBB\xBF", 0) == 0)
+		text.erase(0, 3);
+	if (text.find_first_of("[{") != text.find_first_not_of(" \t\r\n"))
+		text = Base64Decode(text);
+	try { return Parser{ text }.Rows(); }
+	catch (...) { return {}; }
+}
+
+static int ToInt(const std::string& Text, int Fallback = -1)
+{
+	try { return std::stoi(Text); }
+	catch (...) { return Fallback; }
+}
+
+// Tables keyed by REF with one name column.
+static void LoadNames(const fs::path& Path, const char* Column, std::map<int, std::string>& Out)
+{
+	for (Row& row : LoadTable(Path))
+	{
+		int id = ToInt(row["REF"]);
+		if (id >= 0 && !row[Column].empty()) Out[id] = row[Column];
+	}
+}
+
+// Strings named PREFIX followed by a number only.
+static void LoadNumbered(const std::map<std::string, std::string>& Names, const std::string& Prefix, std::map<int, std::string>& Out)
+{
+	for (const auto& [ref, name] : Names)
+	{
+		if (ref.rfind(Prefix, 0) != 0 || ref.size() == Prefix.size())
+			continue;
+		if (ref.find_first_not_of("0123456789", Prefix.size()) != std::string::npos)
+			continue;
+		Out[ToInt(ref.substr(Prefix.size()))] = name;
+	}
+}
+
+void LoadGameData()
+{
+	wchar_t exe[MAX_PATH] = {};
+	GetModuleFileNameW(nullptr, exe, MAX_PATH);
+	fs::path game = fs::path(exe).parent_path();
+
+	std::map<std::string, std::string> names;
+	for (Row& row : LoadTable(game / "dat_str.json"))
+		if (!row["EN"].empty()) names[row["REF"]] = row["EN"];
+
+	std::lock_guard guard(g_Lock);
+	LoadNumbered(names, "weapon_reapersmith_", g_Smiths);
+	LoadNumbered(names, "character_trait_", g_Traits);
+	LoadNumbered(names, "ultimatum_", g_Ultimatums);
+	LoadNumbered(names, "weapon_", g_Weapons);
+
+	for (int hero = 0; hero < 3; hero++)
+	{
+		for (Row& row : LoadTable(game / ("dat_cla_" + std::to_string(hero) + ".json")))
+		{
+			int id = ToInt(row["REF"]);
+			if (id < 0)
+				continue;
+			SkillInfo skill;
+			skill.name = row["EN_NAME"];
+			skill.type = row["TYPE"];
+			if (skill.type == "upgrade" || skill.type == "passive") skill.parent = ToInt(row["ACTIVE_BOX"]);
+			g_Skills[hero][id] = std::move(skill);
+		}
+	}
+	LoadNames(game / "dat_ele.json", "EN_NAME", g_Legacies);
+	for (Row& row : LoadTable(game / "dat_ele.json"))
+		if (ToInt(row["REF"]) >= 0) g_LegacyRealms[ToInt(row["REF"])] = ToInt(row["REALM"]);
+	LoadNames(game / "dat_rea.json", "EN_NAME", g_Reapers);
+	for (Row& row : LoadTable(game / "dat_rea.json"))
+		if (ToInt(row["REF"]) >= 0) g_ReaperOrders[ToInt(row["REF"])] = ToInt(row["ORDER"]);
+	LoadNames(game / "dat_run.json", "EN_NAME", g_Runes);
+	LoadNames(game / "dat_act.json", "EN_NAME", g_Activables);
+	LoadNames(game / "dat_leg.json", "EN_NAME", g_Legendaries);
+	// RANGE holds a flag per value, as "0|1|0".
+	for (Row& row : LoadTable(game / "dat_leg.json"))
+	{
+		if (ToInt(row["REF"]) < 0)
+			continue;
+		for (int slot = 0; slot < SLOT_KINDS; slot++)
+			if (row["ITEM"] == GEAR_SLOT_REFS[slot]) g_LegendarySlots[ToInt(row["REF"])] = slot;
+		std::vector<double>& ranged = g_LegendaryRanges[ToInt(row["REF"])];
+		std::stringstream values(row["VALUE"]), ranges(row["RANGE"]);
+		for (std::string value, range; std::getline(values, value, '|') && std::getline(ranges, range, '|');)
+		{
+			try { if (std::stod(range) == 1) ranged.push_back(std::stod(value)); }
+			catch (...) {}
+		}
+	}
+	// Only the map's warlords have a boss.
+	for (Row& row : LoadTable(game / "dat_war.json"))
+	{
+		if (ToInt(row["REF"]) < 0 || row["WARLORD_BOSS"].empty())
+			continue;
+		WarlordInfo& lord = g_Warlords[ToInt(row["REF"])];
+		lord.name = row["EN_DESC"];
+		lord.x = ToInt(row["X"], 0);
+		lord.y = ToInt(row["Y"], 0);
+	}
+
+	g_Stats.clear();
+	for (Row& row : LoadTable(game / "dat_sta.json"))
+	{
+		StatInfo stat;
+		stat.ref = row["REF"];
+		if (stat.ref.empty())
+			continue;
+		auto name = names.find(stat.ref);
+		stat.name = name != names.end() ? name->second : stat.ref;
+		stat.label = stat.name;
+		if (row["PERCENT"] == "%")
+			stat.name += " %";
+		stat.columns = std::move(row);
+		g_Stats.push_back(std::move(stat));
+	}
+}
+
+const StatInfo* FindStat(const std::string& Ref)
+{
+	for (const StatInfo& stat : g_Stats)
+		if (stat.ref == Ref) return &stat;
+	return nullptr;
+}
+
+const StatInfo* StatById(int Id)
+{
+	std::string id = std::to_string(Id);
+	for (const StatInfo& stat : g_Stats)
+	{
+		auto found = stat.columns.find("REF_NB");
+		if (found != stat.columns.end() && found->second == id) return &stat;
+	}
+	return nullptr;
+}
+
+std::string StatName(const std::string& Ref)
+{
+	const StatInfo* stat = FindStat(Ref);
+	return stat ? stat->name : Ref;
+}
+
+static std::string NameIn(const std::map<int, std::string>& Names, int Id, const char* Kind)
+{
+	auto found = Names.find(Id);
+	return found != Names.end() && !found->second.empty() ? found->second : std::string(Kind) + " " + std::to_string(Id);
+}
+
+std::string SkillName(int Hero, int Id)
+{
+	if (Hero >= 0 && Hero < 3)
+	{
+		auto found = g_Skills[Hero].find(Id);
+		if (found != g_Skills[Hero].end() && !found->second.name.empty()) return found->second.name;
+	}
+	return "skill " + std::to_string(Id);
+}
+
+int UpgradeParent(int Hero, int Id)
+{
+	if (Hero < 0 || Hero > 2)
+		return -1;
+	auto found = g_Skills[Hero].find(Id);
+	return found != g_Skills[Hero].end() ? found->second.parent : -1;
+}
+
+int LegacyRealm(int Id)
+{
+	auto found = g_LegacyRealms.find(Id);
+	return found != g_LegacyRealms.end() ? found->second : -1;
+}
+
+bool UpgradeIsSquare(int Hero, int Id)
+{
+	if (Hero < 0 || Hero > 2)
+		return false;
+	auto found = g_Skills[Hero].find(Id);
+	return found != g_Skills[Hero].end() && found->second.type == "upgrade";
+}
+
+std::string LegacyName(int Id) { return NameIn(g_Legacies, Id, "legacy"); }
+std::string RuneName(int Id) { return NameIn(g_Runes, Id, "rune"); }
+std::string AttributeName(int Id) { return NameIn(g_Traits, Id, "attribute"); }
+std::string SmithName(int Id) { return NameIn(g_Smiths, Id, "smith"); }
+std::string LegendaryName(int Id) { return NameIn(g_Legendaries, Id, "legendary"); }
+std::string UltimatumName(int Id) { return NameIn(g_Ultimatums, Id, "ultimatum"); }
+
+bool LegendaryHasRange(int Id)
+{
+	auto found = g_LegendaryRanges.find(Id);
+	return found == g_LegendaryRanges.end() || !found->second.empty();
+}
+
+// What the game shows for a base value at a roll, before reinforcement: banker's rounding, whole and at least 1.
+static double LegendaryShown(double Value, double Roll)
+{
+	double scaled = std::round(Value * Roll / 100 * 1e6) / 1e6;
+	// The game keeps a decimal for these two.
+	if (Value == 2.5 || Value == 0.6)
+		return std::nearbyint(scaled * 10) / 10;
+	return (std::max)(1.0, std::nearbyint(scaled));
+}
+
+bool LegendaryGains(int Id, double From, double To)
+{
+	auto found = g_LegendaryRanges.find(Id);
+	if (found == g_LegendaryRanges.end())
+		return true;
+	for (double value : found->second)
+		if (LegendaryShown(value, To) != LegendaryShown(value, From)) return true;
+	return false;
+}
+
+int LegendarySlot(int Id)
+{
+	auto found = g_LegendarySlots.find(Id);
+	return found != g_LegendarySlots.end() ? found->second : -1;
+}
+
+const std::map<int, WarlordInfo>& Warlords() { return g_Warlords; }
+
+int ReaperOrder(int Id)
+{
+	auto found = g_ReaperOrders.find(Id);
+	return found != g_ReaperOrders.end() ? found->second : -1;
+}
+
+// Reaper names hold a $ where the class's weapon goes: "Adam Nostrus' $".
+std::string ReaperName(int Id, int Hero, bool Primordial)
+{
+	std::string name = NameIn(g_Reapers, Id, "reaper");
+	size_t mark = name.find('$');
+	if (mark != std::string::npos)
+		name.replace(mark, 1, NameIn(g_Weapons, Hero, "weapon"));
+	return Primordial ? "Primordial " + name : name;
+}
+
+std::string ActivableName(int Id)
+{
+	return Id >= 200 ? LegacyName(Id - 200) : NameIn(g_Activables, Id, "activable");
+}
