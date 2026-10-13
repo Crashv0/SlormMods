@@ -32,6 +32,17 @@ static constexpr std::array TRACED = {
 	"scr_ui_launcher_navigate_temple",
 	"scr_ui_launcher_map_primordial",
 	"scr_launcher_navigate_map",
+	"scr_ui_launcher_map_size",
+	"scr_nethermap_zoom",
+	"scr_run_start",
+	"scr_ui_menus_warlords_rewards",
+	"scr_ui_menu_warlords_reward_choose",
+	"scr_ui_menu_warlords_reward_reroll",
+	"scr_ui_warlords_change_tooltip",
+	"scr_cataclysm_create",
+	"scr_cataclysm_trigger",
+	"scr_cataclysm_end",
+	"scr_cataclysm_clear",
 	"scr_ui_menus_leave",
 	"scr_ui_menu_leave_confirmed",
 	"scr_ui_menu_close_button",
@@ -190,14 +201,14 @@ static RValue& TraceHook(CInstance* Self, CInstance* Other, RValue& Result, int 
 		g_LastStep[Index] = g_Step;
 	}
 	RValue& result = g_Originals[Index](Self, Other, Result, ArgumentCount, Arguments);
-	// The forge as it is made and its chest as it is opened, each at most once in ten seconds.
-	if (std::string_view(TRACED[Index]) == "scr_procedural_great_forge" || std::string_view(TRACED[Index]) == "scr_ui_menus_war_chest")
+	// The forge as it is made, its chest as it is opened and a warlord's rewards, each at most once in ten seconds.
+	if (std::string_view(TRACED[Index]) == "scr_procedural_great_forge" || std::string_view(TRACED[Index]) == "scr_ui_menus_war_chest" || std::string_view(TRACED[Index]) == "scr_ui_menus_warlords_rewards")
 	{
 		static ULONGLONG dumped = 0;
 		if (GetTickCount64() - dumped > 10000)
 		{
 			dumped = GetTickCount64();
-			g_Dev.dump_note = std::string_view(TRACED[Index]) == "scr_procedural_great_forge" ? "forge made" : "war chest menu";
+			g_Dev.dump_note = std::string_view(TRACED[Index]) == "scr_procedural_great_forge" ? "forge made" : std::string_view(TRACED[Index]) == "scr_ui_menus_war_chest" ? "war chest menu" : "warlord rewards";
 			g_Dev.want_dump = true;
 		}
 	}
@@ -551,6 +562,59 @@ static void WatchForge(CInstance* Self)
 		}
 }
 
+// The Netherworld: what the game, its UI and the level hold under these words, logged as it changes.
+static void WatchNether(CInstance* Self)
+{
+	static constexpr std::array WORDS = { "warlord", "nether", "cataclysm", "boss", "objective", "launcher", "quest", "primordial", "portal", "activable_value", "menu_show" };
+	static constexpr std::array HOLDERS = { "global", "ui", "room" };
+	static std::array<std::vector<std::string>, 3> names;
+	static std::array<std::map<std::string, std::string>, 3> last;
+	static ULONGLONG read = 0, listed = 0;
+	ULONGLONG now = GetTickCount64();
+	if (now - read < 250)
+		return;
+	read = now;
+	CInstance* room = FindInstance("obj_procedural");
+	if (!listed || now - listed > 5000)
+	{
+		listed = now;
+		for (size_t holder = 0; holder < 3; holder++)
+		{
+			names[holder].clear();
+			if (holder == 2 && !room)
+				continue;
+			RValue all = g_Yytk->CallBuiltin("variable_instance_get_names", { holder == 0 ? RValue(-5.0) : RValue(holder == 1 ? Self : room) });
+			if (!all.IsArray())
+				continue;
+			for (const RValue& entry : all.ToVector())
+			{
+				std::string name = ToText(entry);
+				// Not the map's place under the mouse, nor timers, nor the game's scripts.
+				if (name.rfind("nethermap_", 0) == 0 || name.rfind("scr_", 0) == 0 || name.find("_time") != std::string::npos || name.find("surf") != std::string::npos)
+					continue;
+				if (std::find_if(WORDS.begin(), WORDS.end(), [&](const char* Word) { return name.find(Word) != std::string::npos; }) != WORDS.end())
+					names[holder].push_back(name);
+			}
+		}
+	}
+	for (size_t holder = 0; holder < 3; holder++)
+	{
+		if (holder == 2 && !room)
+			continue;
+		for (const std::string& name : names[holder])
+		{
+			RValue value = holder == 0 ? Global(name.c_str()) : Local(holder == 1 ? Self : room, name.c_str());
+			if (value.m_Kind == VALUE_UNDEFINED || value.m_Kind == VALUE_UNSET)
+				continue;
+			std::string text = Show(value, 2, 10).substr(0, 300);
+			auto had = last[holder].find(name);
+			if (had != last[holder].end() && had->second != text)
+				Log("nether watch: %s %s %s -> %s", HOLDERS[holder], name.c_str(), had->second.c_str(), text.c_str());
+			last[holder][name] = text;
+		}
+	}
+}
+
 // Slorm and the ancestral legacy's ranks, logged as they change; the first change is dumped.
 static void WatchLegacy()
 {
@@ -637,7 +701,10 @@ void DevTick(CInstance* Self)
 	WatchLegacy();
 	WatchBuffs();
 	if (g_Dev.watch)
+	{
 		WatchForge(Self);
+		WatchNether(Self);
+	}
 	g_Step++;
 	static bool key_was_down = false;
 	bool key_down = (GetAsyncKeyState(DUMP_KEY) & 0x8000) != 0;

@@ -134,7 +134,7 @@ struct Dev
 	bool want_dump = false;
 	std::string dump_note;
 	// Names holding any of these words are printed in full; comma separated.
-	std::string dump_words = "menu,launch,room,run,floor,breach,portal,temple,forge,hub,citizen,mission,level,chest,challenge,choice,wave,war_,reward,procedural,controller,camera,draw_game,surface,hero,aim_cursor,cursor,kb_,kbc_,input,ctm,skill_equipped,cooldown";
+	std::string dump_words = "menu,launch,room,run,floor,breach,portal,temple,forge,hub,citizen,mission,level,chest,challenge,choice,wave,war_,reward,procedural,controller,camera,draw_game,surface,hero,aim_cursor,cursor,kb_,kbc_,input,ctm,skill_equipped,cooldown,warlord,nether,cataclysm,boss,objective,quest,primordial,mba";
 	std::string result;
 	bool trace = true;
 	// Logs the hero's keys and movement variables when they change.

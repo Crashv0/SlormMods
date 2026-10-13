@@ -409,7 +409,7 @@ static void DrawDev()
 	static const char* states[] = { "no walk yet", "starting", "walking", "arrived", "failed" };
 	const Walk& walk = WalkStatus();
 	ImGui::Text("%s  to %.0f %.0f  tries %d  %.1f s  %s", states[walk.state], walk.x, walk.y, walk.tries, walk.seconds, walk.why.c_str());
-	static char words[256] = "";
+	static char words[512] = "";
 	if (!words[0])
 		snprintf(words, sizeof(words), "%s", g_Dev.dump_words.c_str());
 	ImGui::SetNextItemWidth(420);
