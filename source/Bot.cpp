@@ -54,8 +54,14 @@ namespace
 		float loot_range = 450;
 		// In town, walks to Almerolis and starts the next battlefield.
 		bool restart = true;
-		// What is started from town: the battlefield, or the Great Forge.
+		// What is started from town: the battlefield, the Great Forge, or the Slorm Temple.
 		int mode = 0;
+		// The temple floor a run starts on, 0 for the one the launcher has; the highest ever cleared, -1 until read.
+		int temple_floor = 0, temple_cleared = -1;
+		// The shrine at the end of a temple floor is used before the door is taken.
+		bool temple_shrine = true;
+		// Pure slorm left on the ground of a temple floor is walked onto.
+		bool temple_pure = true;
 		// The Great Forge is fought up to this wave, then its chest is opened and the hero heads home.
 		int forge_waves = 10;
 		// In the Great Forge the hero holds the middle and lets the enemies come.
@@ -776,6 +782,9 @@ static bool WarChest(CInstance* Self, const Place& Me, ULONGLONG Now)
 // comes. From the last wave wanted on, no more are started; with the room quiet the chest is opened,
 // which brings the door home.
 static bool g_InForge = false;
+// The temple breach before the one being walked to.
+static Place g_Before;
+static bool g_HasBefore = false;
 // A click told to the game for a button is not also one for the hero to walk or strike on, until then.
 static ULONGLONG g_ButtonUntil = 0;
 static void GreatForge(CInstance* Self, CInstance* Hero, ULONGLONG Now)
@@ -789,24 +798,24 @@ static void GreatForge(CInstance* Self, CInstance* Hero, ULONGLONG Now)
 	// Where the click being made went down, and since when the hero has been dead.
 	static float clicked[2] = { START[0], START[1] };
 	static ULONGLONG dead_at = 0;
+	// Held at the middle, the hero goes out for a while to enemies that have stopped falling.
+	static ULONGLONG fell_at = 0, hunt_until = 0;
+	static int standing = 0;
 	Place me = { ToNumber(Local(Hero, "x")), ToNumber(Local(Hero, "y")) };
 	if (!g_InForge)
 	{
 		g_InForge = true;
+		hunt_until = 0;
+		standing = 0;
 		home = me;
 		// The hero comes in north of the middle. The forge's eight stands ring the room: its middle is theirs.
 		RValue stand = g_Yytk->CallBuiltin("asset_get_index", { RValue("obj_empty_item") });
 		int stands = static_cast<int>(ToNumber(g_Yytk->CallBuiltin("instance_number", { stand })));
 		double left = 1e9, right = -1e9, top = 1e9, bottom = -1e9;
-	// Held at the middle, the hero goes out for a while to enemies that have stopped falling.
-	static ULONGLONG fell_at = 0, hunt_until = 0;
-	static int standing = 0;
 		for (int i = 0; i < stands; i++)
 		{
 			RValue it = g_Yytk->CallBuiltin("instance_find", { stand, RValue(static_cast<double>(i)) });
 			double x = ToNumber(g_Yytk->CallBuiltin("variable_instance_get", { it, RValue("x") })), y = ToNumber(g_Yytk->CallBuiltin("variable_instance_get", { it, RValue("y") }));
-		hunt_until = 0;
-		standing = 0;
 			left = (std::min)(left, x), right = (std::max)(right, x), top = (std::min)(top, y), bottom = (std::max)(bottom, y);
 		}
 		if (stands >= 4)
@@ -895,20 +904,6 @@ static void GreatForge(CInstance* Self, CInstance* Hero, ULONGLONG Now)
 	if (!enemies.empty())
 	{
 		quiet_at = Now;
-		// They come to the hero; ones still far off, where they are let in, are waited for at the middle.
-		if (hunt_until)
-		{
-			if (Far(enemies[0], me) > CLOSE)
-				Go(enemies[0], Now);
-		}
-		else if (g_Farm.forge_center || Far(enemies[0], me) > 280)
-		{
-			if (Far(me, home) > (g_Farm.forge_center ? 45 : 90))
-				Go(home, Now, 24);
-		}
-		else if (Far(enemies[0], me) > CLOSE)
-			Go(enemies[0], Now);
-		snprintf(text, sizeof(text), hunt_until ? "going out to the enemies left, wave %d of %d" : "fighting wave %d of %d", waves, g_Farm.forge_waves);
 		int count = static_cast<int>(enemies.size());
 		if (standing == 0 || count < standing)
 		{
@@ -929,8 +924,24 @@ static void GreatForge(CInstance* Self, CInstance* Hero, ULONGLONG Now)
 			hunt_until = Now + 12000;
 			Log("bot: none of %d fell for a while, going out to the nearest, a %s %.0f away", count, g_Nearest.c_str(), Far(enemies[0], me));
 		}
+		// They come to the hero; ones still far off, where they are let in, are waited for at the middle.
+		if (hunt_until)
+		{
+			if (Far(enemies[0], me) > CLOSE)
+				Go(enemies[0], Now);
+		}
+		else if (g_Farm.forge_center || Far(enemies[0], me) > 280)
+		{
+			if (Far(me, home) > (g_Farm.forge_center ? 45 : 90))
+				Go(home, Now, 24);
+		}
+		else if (Far(enemies[0], me) > CLOSE)
+			Go(enemies[0], Now);
+		snprintf(text, sizeof(text), hunt_until ? "going out to the enemies left, wave %d of %d" : "fighting wave %d of %d", waves, g_Farm.forge_waves);
 		return Say(text);
 	}
+	standing = 0;
+	hunt_until = 0;
 	if (last)
 	{
 		// Quiet for a moment with the wave over: the chest can be opened.
@@ -940,8 +951,6 @@ static void GreatForge(CInstance* Self, CInstance* Hero, ULONGLONG Now)
 		return Say("waiting for the last wave to end");
 	}
 	// A wave the game has not started by itself is started with its button.
-	standing = 0;
-	hunt_until = 0;
 	if (between && menu == "none" && Now - quiet_at > 1500 && Now - between_at > 1500 && Now > acted + 4000 && !release_at)
 	{
 		acted = Now;
@@ -1036,9 +1045,21 @@ static void Hub(CInstance* Self, CInstance* Hero, ULONGLONG Now)
 		if (step == 0)
 		{
 			step = 1;
-			// Almerolis lists the battlefield first and the Great Forge third.
-			call("scr_ui_launcher_change_quest", { RValue(g_Farm.mode == 1 ? 2.0 : 0.0) });
-			return Say(g_Farm.mode == 1 ? "choosing the Great Forge" : "choosing the battlefield");
+			// Almerolis lists the battlefield first, the Slorm Temple second and the Great Forge third.
+			call("scr_ui_launcher_change_quest", { RValue(g_Farm.mode == 1 ? 2.0 : g_Farm.mode == 2 ? 1.0 : 0.0) });
+			return Say(g_Farm.mode == 1 ? "choosing the Great Forge" : g_Farm.mode == 2 ? "choosing the Slorm Temple" : "choosing the battlefield");
+		}
+		if (step == 1 && g_Farm.mode == 2 && g_Farm.temple_floor > 0)
+		{
+			step = 2;
+			// No floor past the one after the highest cleared.
+			int floor = g_Farm.temple_cleared >= 0 ? (std::min)(g_Farm.temple_floor, g_Farm.temple_cleared + 1) : g_Farm.temple_floor;
+			if (static_cast<int>(ToNumber(Local(Self, "temple_floor"))) != floor)
+			{
+				call("scr_ui_launcher_change_temple_floor", { RValue(static_cast<double>(floor)) });
+				Log("bot: temple floor %d asked for, the launcher now has %.0f", floor, ToNumber(Local(Self, "temple_floor")));
+				return Say("choosing the temple floor");
+			}
 		}
 		step = 0;
 		call("scr_run_start", {});
@@ -1227,10 +1248,26 @@ static void BotTick(CInstance* Self)
 	std::vector<Breach> breaches = Breaches();
 	int total = static_cast<int>(breaches.size()), closed = 0;
 	for (const Breach& breach : breaches) closed += breach.open ? 0 : 1;
-	int needed = (std::max)(total - SPARE, 1);
+	// A floor of the Slorm Temple: every breach, one room after the other, then a shrine and the door.
+	CInstance* level = FindInstance("obj_procedural");
+	RValue rooms = level ? Local(level, "temple_room_array") : RValue();
+	bool temple = rooms.IsArray() && !rooms.ToVector().empty();
+	static ULONGLONG shrine_at = 0;
+	static int shrine_tries = 0;
+	static double pure_had = -1;
+	double pure_has = ToNumber(Global("pure_slorm"));
+	if (temple && pure_had >= 0 && pure_has != pure_had)
+		Log("bot: pure slorm %.0f -> %.0f (%+.0f)", pure_had, pure_has, pure_has - pure_had);
+	pure_had = pure_has;
+	if (g_Closed < 0)
+		shrine_at = 0, shrine_tries = 0;
+	int needed = temple ? (std::max)(total, 1) : (std::max)(total - SPARE, 1);
+	// When the last temple breach was closed; the bridge on comes a moment after.
+	static ULONGLONG closed_at = 0;
 	if (closed != g_Closed)
 	{
-		Log("bot: %d of %d breaches closed, the door needs %d", closed, total, needed);
+		closed_at = g_Closed < 0 ? 0 : now;
+		Log("bot: %d of %d breaches closed, the door needs %d%s", closed, total, needed, temple ? ", in the Slorm Temple" : "");
 		if (g_Closed < 0)
 		{
 			std::string all;
@@ -1263,6 +1300,18 @@ static void BotTick(CInstance* Self)
 	// Loot comes before the next breach and the door, but not while a breach is open on the hero.
 	bool shut_in = false;
 	for (const Breach& breach : breaches) shut_in = shut_in || (breach.open && breach.active);
+	// A temple breach just stepped on holds the hero in place for a moment; walks sent then only fail.
+	static long long stepped_on = 0;
+	static ULONGLONG stepped_at = 0;
+	for (const Breach& breach : breaches)
+		if (temple && breach.open && breach.active && Key(breach.at) != stepped_on)
+		{
+			stepped_on = Key(breach.at);
+			stepped_at = now;
+			WalkStop();
+		}
+	if (temple && shut_in && now - stepped_at < 1600)
+		return Say("the breach is opening");
 	if (!shut_in && !(g_Has && g_Reached) && Loot(me, now))
 	{
 		g_Walking = false;
@@ -1270,9 +1319,71 @@ static void BotTick(CInstance* Self)
 		return;
 	}
 
+	// Pure slorm a temple breach leaves on the ground is taken by walking onto it.
+	static std::map<long long, ULONGLONG> pure_since;
+	static int pure_step = 0;
+	if (g_Closed < 0)
+		pure_since.clear();
+	if (temple && g_Farm.temple_pure && !shut_in)
+	{
+		RValue object = g_Yytk->CallBuiltin("asset_get_index", { RValue("obj_slorm_anomaly") });
+		int count = static_cast<int>(ToNumber(g_Yytk->CallBuiltin("instance_number", { object })));
+		Place pure;
+		long long pure_id = 0;
+		bool found = false;
+		for (int i = 0; i < count; i++)
+		{
+			RValue instance = g_Yytk->CallBuiltin("instance_find", { object, RValue(static_cast<double>(i)) });
+			Place at = { ToNumber(g_Yytk->CallBuiltin("variable_instance_get", { instance, RValue("x") })), ToNumber(g_Yytk->CallBuiltin("variable_instance_get", { instance, RValue("y") })) };
+			// It drifts, so it is known by its id. One not reached in a while is left.
+			long long id = static_cast<long long>(g_Yytk->CallBuiltin("variable_instance_get", { instance, RValue("id") }).ToDouble());
+			auto since = pure_since.find(id);
+			if (since != pure_since.end() && now - since->second > 12000)
+				continue;
+			if (!found || Far(at, me) < Far(pure, me))
+				pure = at, pure_id = id, found = true;
+		}
+		if (found)
+		{
+			if (pure_since.emplace(pure_id, now).second)
+				Log("bot: pure slorm on the ground at %.0f %.0f, %.0f away", pure.x, pure.y, Far(pure, me));
+			g_Walking = false;
+			g_Attack = false;
+			// A hero stops 18 above where he is sent: sent below it to stand on it, then across it.
+			static constexpr double ACROSS[][2] = { { 0, 18 }, { 0, 44 }, { 40, 18 }, { -40, 18 }, { 0, -8 } };
+			const double* aim = ACROSS[pure_step % 5];
+			if (Go({ pure.x + aim[0], pure.y + aim[1] }, now))
+				pure_step++;
+			return Say("picking up pure slorm");
+		}
+	}
+
 	char text[128];
-	// The door is clicked as soon as there is one.
 	Place exit;
+	// The temple's shrine comes with the last breach closed. Using it gives its pure slorm and makes
+	// the door; it does not take a use at once, so it is used until the door is there.
+	if (temple && g_Farm.temple_shrine && closed >= total && shrine_tries < 20 && !FindInstance("obj_breach_door"))
+		if (CInstance* shrine = FindInstance("obj_temple_shrine"))
+		{
+			Rest();
+			Place at = { ToNumber(Local(shrine, "x")), ToNumber(Local(shrine, "y")) };
+			Say("using the shrine");
+			// It takes a use from across its room, and the ground by it cannot always be walked on: it
+			// is used from where the hero is, and come up to, from his side, only if that does nothing.
+			double away = Far(me, at);
+			bool nearer = away > 220 || (away > 90 && shrine_tries >= 4 && shrine_tries % 4 == 0);
+			if (nearer && Go({ at.x + (me.x - at.x) / away * 55, at.y + (me.y - at.y) / away * 55 + 18 }, now))
+				shrine_tries += away > 220 ? 0 : 1;
+			else if (away <= 220 && now - shrine_at > 1000)
+			{
+				shrine_at = now;
+				shrine_tries++;
+				Log("bot: using the shrine at %.0f %.0f from %.0f away, try %d; it has activable %s", at.x, at.y, away, shrine_tries, ToText(Local(shrine, "activable")).c_str());
+				Use(shrine, 15);
+			}
+			return;
+		}
+	// The door is clicked as soon as there is one.
 	if (Nearest("obj_breach_door", me, exit))
 	{
 		Rest();
@@ -1296,7 +1407,8 @@ static void BotTick(CInstance* Self)
 	if (g_Has && now - g_Since > GIVE_UP_MS)
 	{
 		Log("bot: the breach at %.0f %.0f took too long, left for later", g_Breach.x, g_Breach.y);
-		g_Skip[Key(g_Breach)] = now + SKIP_MS;
+		if (!temple)
+			g_Skip[Key(g_Breach)] = now + SKIP_MS;
 		Rest();
 	}
 	if (!g_Has)
@@ -1306,7 +1418,7 @@ static void BotTick(CInstance* Self)
 		if (now - planned < 400)
 			return;
 		planned = now;
-		if (g_Floor.width < 1)
+		if (g_Floor.width < 1 && !temple)
 			ReadFloor(Self);
 		// One already stepped on comes first: there is no leaving it.
 		const Breach* best = nullptr;
@@ -1314,6 +1426,52 @@ static void BotTick(CInstance* Self)
 		for (const Breach& breach : breaches)
 			if (breach.open && breach.active)
 				best = &breach;
+		// The temple's rooms come one at a time, each with its place in the order: across, down, turn.
+		// Breaches stand one to a room, so theirs are the same across and down, counted from the least.
+		if (temple && !best)
+		{
+			std::vector<double> xs, ys;
+			std::vector<int> across, down;
+			auto add = [](auto& Into, auto Value) { if (std::find(Into.begin(), Into.end(), Value) == Into.end()) Into.push_back(Value); };
+			std::vector<std::vector<RValue>> turns;
+			for (const RValue& room : rooms.ToVector())
+				if (room.IsArray() && room.ToVector().size() >= 3)
+					turns.push_back(room.ToVector());
+			for (const auto& turn : turns)
+				add(across, static_cast<int>(ToNumber(turn[0]))), add(down, static_cast<int>(ToNumber(turn[1])));
+			for (const Breach& breach : breaches)
+				add(xs, breach.at.x), add(ys, breach.at.y);
+			std::sort(xs.begin(), xs.end()), std::sort(ys.begin(), ys.end());
+			std::sort(across.begin(), across.end()), std::sort(down.begin(), down.end());
+			int least = 0;
+			bool placed = xs.size() == across.size() && ys.size() == down.size();
+			std::map<int, Place> by_turn;
+			for (const Breach& breach : breaches)
+			{
+				int turn_of = 0;
+				if (placed)
+				{
+					int column = across[std::find(xs.begin(), xs.end(), breach.at.x) - xs.begin()], row = down[std::find(ys.begin(), ys.end(), breach.at.y) - ys.begin()];
+					for (const auto& turn : turns)
+						if (static_cast<int>(ToNumber(turn[0])) == column && static_cast<int>(ToNumber(turn[1])) == row)
+							turn_of = static_cast<int>(ToNumber(turn[2]));
+				}
+				if (turn_of)
+					by_turn[turn_of] = breach.at;
+				if (!breach.open)
+					continue;
+				// Without a place in the order, the nearest.
+				bool sooner = !best || (turn_of && least ? turn_of < least : !least && (turn_of || Far(breach.at, me) < Far(best->at, me)));
+				if (sooner)
+					best = &breach, least = turn_of;
+			}
+			// The room before it is the one the hero leaves by a bridge.
+			g_HasBefore = best && least > 1 && by_turn.count(least - 1);
+			if (g_HasBefore)
+				g_Before = by_turn[least - 1];
+			if (best)
+				Log("bot: the temple's next breach is at %.0f %.0f, turn %d of %d", best->at.x, best->at.y, least, static_cast<int>(turns.size()));
+		}
 		// Chaos breaches are passed over when asked, unless the door cannot be had without them.
 		for (int pass = 0; pass < 2 && !best; pass++)
 		{
@@ -1327,6 +1485,8 @@ static void BotTick(CInstance* Self)
 		}
 		// With the door to be had, a breach is only worth it when it is near on foot; the door opens
 		// by clicking what is left of a closed breach, the nearest of them.
+		if (temple && closed >= needed)
+			return Say("every breach is closed, waiting for the shrine and the door");
 		if (closed >= needed && (!best || (!best->active && away > g_Farm.extra)) && Nearest("obj_breach_residue", me, exit))
 		{
 			g_Attack = false;
@@ -1368,13 +1528,40 @@ static void BotTick(CInstance* Self)
 		if (WalkStatus().state == WALK_FAILED && ++g_Fails >= 2)
 		{
 			Log("bot: cannot walk to the breach at %.0f %.0f (%s), left for later", g_Breach.x, g_Breach.y, WalkStatus().why.c_str());
-			g_Skip[Key(g_Breach)] = now + SKIP_MS;
+			if (!temple)
+				g_Skip[Key(g_Breach)] = now + SKIP_MS;
 			return Rest();
 		}
 	}
 	if (Far(g_Breach, me) > ON_BREACH)
 	{
-		if (Go(g_Breach, now))
+		if (temple && g_HasBefore && now - closed_at < 1200 && !Busy())
+			return Say("waiting for the bridge to the next room");
+		// Temple rooms are joined by a narrow bridge from middle to middle, and a hero walks 18 above
+		// where he is sent: still in the room before, he is first put on the line the bridge runs along.
+		Place to = g_Breach;
+		if (temple && g_HasBefore)
+		{
+			// A walk has to be some way to be one: along the line too, towards the room's middle
+			// when far from it, and on towards the bridge otherwise.
+			auto along = [](double Mine, double Middle, double Next) {
+				double off = Mine - Middle;
+				return Middle + (fabs(off) > 70 ? off - (off > 0 ? 60 : -60) : off + (Next > Middle ? 60 : -60));
+			};
+			bool level = fabs(g_Before.y - g_Breach.y) < 1;
+			if (level && fabs(me.x - g_Before.x) < 250 && fabs(me.y + 18 - g_Breach.y) > 12)
+				to = { along(me.x, g_Before.x, g_Breach.x), g_Breach.y };
+			else if (!level && fabs(me.y + 18 - g_Before.y) < 160 && fabs(me.x - g_Breach.x) > 12)
+				to = { g_Breach.x, along(me.y + 18, g_Before.y, g_Breach.y) };
+		}
+		// A walk at the breach that went wrong off that line is started over from the line.
+		const Walk& walk = WalkStatus();
+		if (Far(to, g_Breach) > 1 && Busy() && walk.tries > 1 && fabs(walk.x - g_Breach.x) < 1 && fabs(walk.y - g_Breach.y) < 1)
+		{
+			Log("bot: off the bridge's line at %.0f %.0f on the way to %.0f %.0f, lining up again", me.x, me.y, g_Breach.x, g_Breach.y);
+			WalkStop();
+		}
+		if (Go(to, now))
 			g_Walking = true;
 		snprintf(text, sizeof(text), "walking to the breach at %.0f %.0f", g_Breach.x, g_Breach.y);
 		return Say(text);
@@ -1429,6 +1616,10 @@ namespace
 		{
 			g_Farm.no_ctm = NoClickToMove();
 			ReadBag();
+			// The second number the game keeps for the temple is the highest floor cleared.
+			RValue temple = Global("slorm_temple_data");
+			std::vector<RValue> kept = temple.IsArray() ? temple.ToVector() : std::vector<RValue>();
+			g_Farm.temple_cleared = kept.size() > 1 ? static_cast<int>(ToNumber(kept[1])) : -1;
 			BotTick(Self);
 		}
 
@@ -1454,9 +1645,9 @@ namespace
 			ImGui::SameLine();
 			// Almerolis' four, in his order; the mode each stands for, -1 for one the Farmer cannot play yet.
 			static const char* const EXPEDITIONS[] = { "Battlefield", "The Slorm Temple", "The Great Forge", "The Netherworld" };
-			static constexpr int MODES[] = { 0, -1, 1, -1 };
+			static constexpr int MODES[] = { 0, 2, 1, -1 };
 			ImGui::SetNextItemWidth(170 * g_Appearance.scale);
-			if (ImGui::BeginCombo("##expedition", EXPEDITIONS[g_Farm.mode == 1 ? 2 : 0]))
+			if (ImGui::BeginCombo("##expedition", EXPEDITIONS[g_Farm.mode == 1 ? 2 : g_Farm.mode == 2 ? 1 : 0]))
 			{
 				for (int i = 0; i < 4; i++)
 				{
@@ -1498,7 +1689,7 @@ namespace
 			}
 			changed |= ImGui::Checkbox("Stop when the bag is full", &g_Farm.stop_full);
 			if (ImGui::IsItemHovered())
-				ImGui::SetTooltip("On the Battlefield the hero takes the next door home.\nIn town it stops instead of starting again.");
+				ImGui::SetTooltip("On the Battlefield and in the Slorm Temple the hero takes the next door home.\nIn town it stops instead of starting again.");
 			if (g_Farm.bag_used >= 0)
 			{
 				ImGui::SameLine();
@@ -1540,6 +1731,23 @@ namespace
 					g_Farm.loot_log.clear();
 				ImGui::EndTabItem();
 			}
+			if (ImGui::BeginTabItem("Temple"))
+			{
+				ImGui::SetNextItemWidth(90 * g_Appearance.scale);
+				changed |= ImGui::InputInt("Start on this floor (0 = the one the launcher has)", &g_Farm.temple_floor, 0, 0);
+				g_Farm.temple_floor = (std::min)((std::max)(g_Farm.temple_floor, 0), 3000);
+				if (ImGui::IsItemHovered())
+					ImGui::SetTooltip("Each expedition starts on this floor and climbs from it.\nNo higher than the floor after the highest one cleared.");
+				if (g_Farm.temple_cleared >= 0)
+				{
+					ImGui::SameLine();
+					ImGui::TextDisabled("highest cleared %d", g_Farm.temple_cleared);
+				}
+				changed |= ImGui::Checkbox("Use the shrine at the end of each floor", &g_Farm.temple_shrine);
+				changed |= ImGui::Checkbox("Pick up pure slorm left on the ground", &g_Farm.temple_pure);
+				ImGui::TextDisabled("Floors played before heading home are set above, with the expedition.");
+				ImGui::EndTabItem();
+			}
 			// The mods whose tabs sit in this one.
 			for (Feature* feature : Features())
 			{
@@ -1577,7 +1785,10 @@ namespace
 			else if (Name == "extra") Words >> g_Farm.extra;
 			else if (Name == "loot_range") Words >> g_Farm.loot_range;
 			else if (Name == "skip_chaos") { Words >> flag; g_Farm.skip_chaos = flag != 0; }
-			else if (Name == "mode") { Words >> g_Farm.mode; g_Farm.mode = g_Farm.mode == 1 ? 1 : 0; }
+			else if (Name == "mode") { Words >> g_Farm.mode; g_Farm.mode = g_Farm.mode == 1 || g_Farm.mode == 2 ? g_Farm.mode : 0; }
+			else if (Name == "temple_floor") { Words >> g_Farm.temple_floor; g_Farm.temple_floor = (std::min)((std::max)(g_Farm.temple_floor, 0), 3000); }
+			else if (Name == "temple_shrine") { Words >> flag; g_Farm.temple_shrine = flag != 0; }
+			else if (Name == "temple_pure") { Words >> flag; g_Farm.temple_pure = flag != 0; }
 			else if (Name == "forge_waves") { Words >> g_Farm.forge_waves; g_Farm.forge_waves = (std::min)((std::max)(g_Farm.forge_waves, 1), 100); }
 			else if (Name == "forge_center") { Words >> flag; g_Farm.forge_center = flag != 0; }
 			else if (Name == "max_runs") { Words >> g_Farm.max_runs; g_Farm.max_runs = (std::min)((std::max)(g_Farm.max_runs, 0), 100); }
@@ -1598,6 +1809,9 @@ namespace
 				<< "farmer.skip_chaos " << (g_Farm.skip_chaos ? 1 : 0) << '\n'
 				<< "farmer.extra " << g_Farm.extra << '\n'
 				<< "farmer.restart " << (g_Farm.restart ? 1 : 0) << '\n'
+				<< "farmer.temple_floor " << g_Farm.temple_floor << '\n'
+				<< "farmer.temple_shrine " << (g_Farm.temple_shrine ? 1 : 0) << '\n'
+				<< "farmer.temple_pure " << (g_Farm.temple_pure ? 1 : 0) << '\n'
 				<< "farmer.mode " << g_Farm.mode << '\n'
 				<< "farmer.forge_waves " << g_Farm.forge_waves << '\n'
 				<< "farmer.forge_center " << (g_Farm.forge_center ? 1 : 0) << '\n'

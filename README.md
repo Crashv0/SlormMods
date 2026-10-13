@@ -20,11 +20,12 @@ On the Macros tab. Presses skills for the hero by rules; the game still applies 
 On the Farm tab. Plays expeditions for the hero, start to finish, and goes again from town. Needs Click to Move turned on in the game's options, and suits a build whose skills fire by themselves.
 
 - **Run the expedition.** Switched by the tick box or a key (Home).
-- **From town.** Walks to Almerolis and starts the chosen expedition, on the level the launcher was left on. Battlefield and The Great Forge so far.
+- **From town.** Walks to Almerolis and starts the chosen expedition, on the level the launcher was left on. Battlefield, The Slorm Temple and The Great Forge so far.
 - **Battlefield.** Closes breaches by the shortest way round on foot, opens the portal once enough are closed, and takes it. Breach V can be skipped.
+- **The Slorm Temple.** Closes every breach of a floor, room after room, picks up pure slorm left on the ground, uses the shrine and takes the door. Can start each expedition on a floor you set.
 - **The Great Forge.** Starts each wave, fights to the wave you set, opens the War Chest, picks up what it held and heads home. Needs "Auto pick Great Forge paths" on. The hero can hold the center of the room.
 - **Loot.** Picks up what drops within a range. A log lists it, reapers by name, with a switch for each kind of item.
-- **Limits.** Stop after a number of expeditions, head home after a number of Battlefield floors, and stop when the bag is full.
+- **Limits.** Stop after a number of expeditions, head home after a number of Battlefield or temple floors, and stop when the bag is full.
 
 ### Auto pick Great Forge paths
 
