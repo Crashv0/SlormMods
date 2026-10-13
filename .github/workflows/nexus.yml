@@ -1,0 +1,54 @@
+name: Upload to Nexus Mods
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to upload, such as SlormSuite-v0.7.0
+        required: true
+
+permissions:
+  contents: read
+
+# A release is tagged <mod>-v<version>, such as SlormSuite-v0.7.0. Each mod has its own Nexus page:
+# repo variables NEXUS_MOD_ID_<mod> and NEXUS_FILE_ID_<mod>.
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download the release zip
+        run: |
+          MOD="${TAG%-v*}"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$MOD-*.zip"
+          echo "MOD=$MOD" >> "$GITHUB_ENV"
+          echo "ZIP=$(ls "$MOD"-*.zip)" >> "$GITHUB_ENV"
+          echo "VERSION=${TAG##*-v}" >> "$GITHUB_ENV"
+
+      # The release notes are a bullet list; Nexus gets the lines without the dashes.
+      - name: Read the changelog
+        run: |
+          {
+            echo "CHANGELOG<<CHANGELOG_END"
+            gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body | tr -d '\r' | sed 's/^- //'
+            echo "CHANGELOG_END"
+          } >> "$GITHUB_ENV"
+
+      # v1.0.0-beta.10
+      - name: Upload to Nexus Mods
+        uses: Nexus-Mods/upload-action@c96019556046053aa26044b44396cd38929daf23
+        with:
+          api_key: ${{ secrets.NEXUSMODS_API_KEY }}
+          file_id: ${{ vars[format('NEXUS_FILE_ID_{0}', env.MOD)] }}
+          filename: ${{ env.ZIP }}
+          version: ${{ env.VERSION }}
+          display_name: ${{ env.MOD }}
+          archive_existing_version: true
+          update_mod_version: true
+          primary_mod_manager_download: true
+          mod_id: ${{ vars[format('NEXUS_MOD_ID_{0}', env.MOD)] }}
+          changelog: ${{ env.CHANGELOG }}

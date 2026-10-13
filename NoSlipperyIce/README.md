@@ -28,4 +28,4 @@ Needs Windows with VS 2022 Build Tools (C++ workload), run from WSL.
 ./build.sh package  # dist/NoSlipperyIce-v<version>.zip
 ```
 
-Built on [Aurie](https://github.com/AurieFramework/Aurie) and [YYToolkit](https://github.com/AurieFramework/YYToolkit); see [THIRD-PARTY.md](THIRD-PARTY.md). Licensed under AGPL-3.0.
+Built on [Aurie](https://github.com/AurieFramework/Aurie) and [YYToolkit](https://github.com/AurieFramework/YYToolkit); see [THIRD-PARTY.md](../THIRD-PARTY.md). Licensed under AGPL-3.0.

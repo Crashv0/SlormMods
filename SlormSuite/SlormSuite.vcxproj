@@ -35,7 +35,7 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
-      <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)vendor\imgui;$(ProjectDir)vendor\imgui\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\include;$(ProjectDir)..\vendor\imgui;$(ProjectDir)..\vendor\imgui\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -45,7 +45,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="include\YYToolkit\YYTK_Shared_Types.cpp" />
+    <ClCompile Include="..\include\YYToolkit\YYTK_Shared_Types.cpp" />
     <ClCompile Include="source\ModuleMain.cpp" />
     <ClCompile Include="source\Game.cpp" />
     <ClCompile Include="source\Dev.cpp" />
@@ -53,12 +53,12 @@
     <ClCompile Include="source\Bot.cpp" />
     <ClCompile Include="source\features\*.cpp" />
     <ClCompile Include="source\Overlay.cpp" />
-    <ClCompile Include="vendor\imgui\imgui.cpp" />
-    <ClCompile Include="vendor\imgui\imgui_draw.cpp" />
-    <ClCompile Include="vendor\imgui\imgui_tables.cpp" />
-    <ClCompile Include="vendor\imgui\imgui_widgets.cpp" />
-    <ClCompile Include="vendor\imgui\backends\imgui_impl_dx11.cpp" />
-    <ClCompile Include="vendor\imgui\backends\imgui_impl_win32.cpp" />
+    <ClCompile Include="..\vendor\imgui\imgui.cpp" />
+    <ClCompile Include="..\vendor\imgui\imgui_draw.cpp" />
+    <ClCompile Include="..\vendor\imgui\imgui_tables.cpp" />
+    <ClCompile Include="..\vendor\imgui\imgui_widgets.cpp" />
+    <ClCompile Include="..\vendor\imgui\backends\imgui_impl_dx11.cpp" />
+    <ClCompile Include="..\vendor\imgui\backends\imgui_impl_win32.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="SlormSuite.rc" />
