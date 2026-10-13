@@ -288,6 +288,34 @@ std::vector<std::pair<std::string, std::string>> SpecialStats(const std::string&
 	return out;
 }
 
+bool Grafted(const std::string& Tier, const std::string& Stat)
+{
+	if (!g_HasItem || IsSpecialTier(Tier))
+		return false;
+	std::string slot = Lower(g_ItemSlot);
+	if (IsLegendaryTier(Tier))
+	{
+		try
+		{
+			auto found = g_Legendaries.find(std::stoi(Stat.substr(Stat.rfind('_') + 1)));
+			return found != g_Legendaries.end() && !found->second.slot.empty() && found->second.slot != slot;
+		}
+		catch (...) { return false; }
+	}
+	const StatInfo* stat = FindStat(Stat);
+	if (!stat)
+		return false;
+	std::string column = slot == "body" ? "ARMOR" : slot;
+	std::transform(column.begin(), column.end(), column.begin(), [](unsigned char c) { return static_cast<char>(toupper(c)); });
+	auto found = stat->columns.find(column);
+	std::string pool = found != stat->columns.end() ? found->second : "";
+	// Normal rolls the slot's primary stats, magic and rare its secondary ones too, epic the secondary and epic ones.
+	if (Tier == "N") return pool != "P";
+	if (Tier == "M" || Tier == "R") return pool != "P" && pool != "S";
+	if (Tier == "E") return pool != "S" && pool != "E";
+	return pool.empty();
+}
+
 std::string StatName(const std::string& Ref, int Hero)
 {
 	if (Ref.rfind("leg_", 0) == 0)

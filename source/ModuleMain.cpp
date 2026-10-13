@@ -446,7 +446,7 @@ static std::string WithArticle(const std::string& Name)
 	return (vowel ? "an " : "a ") + Name;
 }
 
-// 0 met, 1 still to do, 2 cannot be reached by reforging.
+// 0 met, 1 still to do, 2 cannot be reached by reforging, 3 only by a graft, which a run leaves alone.
 int TargetState(const Target& Target, std::string& Text)
 {
 	if (IsLevelTier(Target.tier))
@@ -502,6 +502,13 @@ int TargetState(const Target& Target, std::string& Text)
 	}
 	if (elsewhere)
 	{
+		// Moving a grafted stat would reroll it away; only another graft puts it in this tier.
+		if (Grafted(elsewhere->tier, elsewhere->stat))
+		{
+			Text = std::string("grafted in ") + TierName(elsewhere->tier);
+			Text += Grafted(Target.tier, Target.stat) ? std::string(", needs a graft in ") + TierName(Target.tier) : ", not moved";
+			return 3;
+		}
 		Text = "already " + WithArticle(TierName(elsewhere->tier)) + " stat";
 		if (!g_MoveTiers)
 			return 2;
@@ -524,6 +531,12 @@ int TargetState(const Target& Target, std::string& Text)
 			if (ref == Target.stat) listed = true;
 		if (!listed)
 		{
+			// Another slot's legendary gets here only by a graft.
+			if (Grafted(Target.tier, Target.stat))
+			{
+				Text = "needs grafted effect";
+				return 3;
+			}
 			Text = "not a legendary for this item";
 			return 2;
 		}
@@ -546,7 +559,13 @@ int TargetState(const Target& Target, std::string& Text)
 		for (const ::Target& other : g_Targets)
 			if (IsLevelTier(other.tier)) leveling = UpdateOffered();
 		if (!leveling)
-			return 2;
+		{
+			// At its level and still not offered: the slot never rolls it in this tier.
+			if (needed > g_ItemLevel)
+				return 2;
+			Text = "needs grafted stat";
+			return 3;
+		}
 		Text += needed > g_ItemLevel ? ", will update" : " at this level, checked again after the update";
 		return 1;
 	}
@@ -585,6 +604,12 @@ int TargetState(const Target& Target, std::string& Text)
 // Targets of the current run; g_Targets, or derived from the selected recipe.
 static std::vector<Target> g_RunTargets;
 
+static bool NeedsGraft(const Target& Target)
+{
+	std::string text;
+	return TargetState(Target, text) == 3;
+}
+
 // The run wants more stats in the tier than the item has there.
 static bool ShortTier(const std::string& Tier)
 {
@@ -592,7 +617,7 @@ static bool ShortTier(const std::string& Tier)
 	for (const Affix& affix : g_Item)
 		if (affix.tier == Tier) have++;
 	for (const Target& target : g_RunTargets)
-		if (target.tier == Tier) wanted++;
+		if (target.tier == Tier && !NeedsGraft(target)) wanted++;
 	return have > 0 && wanted > have;
 }
 
@@ -1230,7 +1255,7 @@ static void Tick(CInstance* Self, CInstance* Other)
 				bool present = false;
 				for (const Affix& other : g_Item)
 					if (other.tier == target.tier && other.stat == target.stat) present = true;
-				if (!present) missing = true;
+				if (!present && !NeedsGraft(target)) missing = true;
 			}
 			// A tier with fewer stats than targets has to keep one stat free for the reroll that grows it.
 			if (own && !affix.locked && ShortTier(affix.tier) && UnlockedIn(affix.tier) <= 1)
@@ -1272,8 +1297,11 @@ static void Tick(CInstance* Self, CInstance* Other)
 		if (match && Met(target, *match))
 			continue;
 		std::string problem;
-		if (TargetState(target, problem) == 2)
+		int state = TargetState(target, problem);
+		if (state == 2)
 			return Stop((StatName(target.stat) + ": " + problem).c_str());
+		if (state == 3)
+			continue;
 		// Held locked while its tier still misses a target stat; that one goes first.
 		if (match && match->locked)
 			continue;
@@ -1338,7 +1366,14 @@ static void Tick(CInstance* Self, CInstance* Other)
 		break;
 	}
 	if (!pending && !lock_affix)
+	{
+		int grafts = 0;
+		for (const Target& target : g_RunTargets)
+			if (NeedsGraft(target)) grafts++;
+		if (grafts > 0)
+			return Stop(("all other targets met, " + std::to_string(grafts) + (grafts == 1 ? " needs a graft" : " need a graft")).c_str());
 		return Stop("all targets met");
+	}
 	if (g_Attempts >= g_MaxAttempts)
 		return Stop("max_attempts reached");
 

@@ -212,6 +212,8 @@ const char* HeroName(int Class);
 
 void LoadGameData();
 const StatInfo* FindStat(const std::string& Ref);
+// A stat or legendary the item's slot cannot roll in that tier: it can only have come from a graft.
+bool Grafted(const std::string& Tier, const std::string& Stat);
 std::string StatName(const std::string& Ref, int Hero = -1);
 std::string LegendaryName(int Id);
 // Whether any shown value of the legendary differs between two rolls; small values round to the same number.

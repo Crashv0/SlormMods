@@ -167,7 +167,14 @@ static bool DrawItem()
 				ImGui::TextUnformatted(StatName(affix.stat).c_str());
 			// Same tags and colours as the stat dropdown.
 			bool tagged = false;
-			if (affix.pure > 100)
+			// A grafted stat says so, in the pure colour when it is pure.
+			if (Grafted(affix.tier, affix.stat))
+			{
+				ImGui::SameLine();
+				ImGui::TextColored(affix.pure > 100 ? PURE_COLOR : ImVec4(1.0f, 1.0f, 1.0f, 1.0f), "[grafted]");
+				tagged = true;
+			}
+			else if (affix.pure > 100)
 			{
 				ImGui::SameLine();
 				ImGui::TextColored(PURE_COLOR, "[pure]");
@@ -385,11 +392,19 @@ static bool DrawTargets()
 		}
 		if (g_HasItem)
 		{
-			static const ImVec4 colors[] = { { 0.4f, 0.9f, 0.4f, 1.0f }, { 0.9f, 0.8f, 0.3f, 1.0f }, { 1.0f, 0.4f, 0.4f, 1.0f } };
+			static const ImVec4 colors[] = { { 0.4f, 0.9f, 0.4f, 1.0f }, { 0.9f, 0.8f, 0.3f, 1.0f }, { 1.0f, 0.4f, 0.4f, 1.0f }, { 0.6f, 0.6f, 0.6f, 1.0f } };
 			std::string state_text;
 			int state = TargetState(g_Targets[i], state_text);
 			ImGui::SameLine();
 			ImGui::TextColored(colors[state], "- %s", state_text.c_str());
+			// A stat the item holds from a graft says so, in the pure colour when it is pure.
+			for (const Affix& affix : g_Item)
+			{
+				if (affix.stat != g_Targets[i].stat || !Grafted(affix.tier, affix.stat))
+					continue;
+				ImGui::SameLine();
+				ImGui::TextColored(affix.pure > 100 ? PURE_COLOR : ImVec4(1.0f, 1.0f, 1.0f, 1.0f), "[grafted]");
+			}
 		}
 		ImGui::PopID();
 	}
@@ -476,7 +491,12 @@ static bool DrawTargets()
 				ImGui::TextColored({ 0.9f, 0.8f, 0.3f, 1.0f }, "[on item]");
 				ImGui::SameLine(0, 0);
 				ImGui::TextColored(TierColor(on_item->tier), "[%s]", tier.c_str());
-				if (on_item->pure > 100)
+				if (Grafted(on_item->tier, on_item->stat))
+				{
+					ImGui::SameLine(0, 0);
+					ImGui::TextColored(on_item->pure > 100 ? PURE_COLOR : ImVec4(1.0f, 1.0f, 1.0f, 1.0f), "[grafted]");
+				}
+				else if (on_item->pure > 100)
 				{
 					ImGui::SameLine(0, 0);
 					ImGui::TextColored(PURE_COLOR, "[pure]");
